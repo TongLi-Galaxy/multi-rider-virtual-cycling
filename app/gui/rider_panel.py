@@ -79,6 +79,7 @@ class RiderPanel(QtWidgets.QFrame):
         self.elapsed_label = QtWidgets.QLabel("00:00")
         self.dropout_label = QtWidgets.QLabel("0.0 s")
         self.distance_label = QtWidgets.QLabel("0 m")
+        self.segment_label = QtWidgets.QLabel("1/1 0%")
         self.status_label = QtWidgets.QLabel("未连接")
         self.device_label = QtWidgets.QLabel("-")
         self.final_label = QtWidgets.QLabel("-")
@@ -93,9 +94,10 @@ class RiderPanel(QtWidgets.QFrame):
         self._add_value(detail_grid, 2, 0, "已用时间", self.elapsed_label)
         self._add_value(detail_grid, 2, 1, "掉线", self.dropout_label)
         self._add_value(detail_grid, 3, 0, "距离", self.distance_label)
-        self._add_value(detail_grid, 3, 1, "状态", self.status_label)
-        self._add_value(detail_grid, 4, 0, "设备", self.device_label)
+        self._add_value(detail_grid, 3, 1, "赛段", self.segment_label)
+        self._add_value(detail_grid, 4, 0, "状态", self.status_label)
         self._add_value(detail_grid, 4, 1, "成绩", self.final_label)
+        self._add_value(detail_grid, 5, 0, "设备", self.device_label)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -171,6 +173,10 @@ class RiderPanel(QtWidgets.QFrame):
         self.elapsed_label.setText(format_seconds(elapsed))
         self.dropout_label.setText(f"{rider.dropout_time_at(now):.1f} s")
         self.distance_label.setText(f"{rider.simulated_distance_m:.0f} m")
+        self.segment_label.setText(
+            f"{rider.current_segment_index}/{rider.total_segments} "
+            f"{rider.current_segment_progress * 100:.0f}%"
+        )
         self.device_label.setText(rider.device_name or rider.device_address or "-")
         self.device_label.setToolTip(rider.device_address or rider.device_name)
         self.status_label.setText(rider.connection_status)

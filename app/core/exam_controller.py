@@ -15,12 +15,18 @@ from app.core.rider_state import (
     STATUS_UNSUPPORTED,
 )
 
+EXAM_MODE_TIME = "time"
+EXAM_MODE_ROUTE = "route"
+
 
 class ExamController:
     def __init__(self, duration_seconds: int = 60) -> None:
         self.duration_seconds = duration_seconds
+        self.exam_mode = EXAM_MODE_TIME
+        self.bike_weight_kg = 10.0
         self.riders = [RiderState(slot=index) for index in range(1, 5)]
         self.route_profile = RouteProfile()
+        self.active_slots: set[int] = set()
         self.exam_id = ""
         self.start_time: float | None = None
         self.end_time: float | None = None
@@ -42,11 +48,30 @@ class ExamController:
     def set_duration(self, duration_seconds: int) -> None:
         self.duration_seconds = max(1, int(duration_seconds))
 
+    def set_exam_mode(self, exam_mode: str) -> None:
+        self.exam_mode = EXAM_MODE_ROUTE if exam_mode == EXAM_MODE_ROUTE else EXAM_MODE_TIME
+
+    def set_bike_weight(self, bike_weight_kg: float) -> None:
+        self.bike_weight_kg = min(30.0, max(5.0, float(bike_weight_kg)))
+        now = time.time()
+        for rider in self.riders:
+            rider.advance_simulation(
+                now,
+                self.route_profile,
+                bike_weight_kg=self.bike_weight_kg,
+                loop_route=self.exam_mode == EXAM_MODE_TIME,
+            )
+
     def set_route(self, route_profile: RouteProfile) -> None:
         self.route_profile = route_profile
         now = time.time()
         for rider in self.riders:
-            rider.advance_simulation(now, self.route_profile)
+            rider.advance_simulation(
+                now,
+                self.route_profile,
+                bike_weight_kg=self.bike_weight_kg,
+                loop_route=self.exam_mode == EXAM_MODE_TIME,
+            )
 
     def set_rider_name(self, slot: int, name: str) -> None:
         self.rider(slot).rider_name = name
@@ -54,7 +79,12 @@ class ExamController:
     def set_rider_weight(self, slot: int, weight_kg: float) -> None:
         rider = self.rider(slot)
         rider.weight_kg = min(200.0, max(30.0, float(weight_kg)))
-        rider.advance_simulation(time.time(), self.route_profile)
+        rider.advance_simulation(
+            time.time(),
+            self.route_profile,
+            bike_weight_kg=self.bike_weight_kg,
+            loop_route=self.exam_mode == EXAM_MODE_TIME,
+        )
 
     def bind_device(self, slot: int, device: dict[str, object]) -> None:
         rider = self.rider(slot)
@@ -67,8 +97,11 @@ class ExamController:
     def rider(self, slot: int) -> RiderState:
         return self.riders[slot - 1]
 
+    def active_riders(self) -> list[RiderState]:
+        return [r for r in self.riders if r.device_address or r.device_name]
+
     def prepare(self) -> tuple[bool, str]:
-        active_riders = [r for r in self.riders if r.device_address or r.device_name]
+        active_riders = self.active_riders()
         if not active_riders:
             return False, "请先绑定或连接至少一台设备"
 
@@ -101,10 +134,14 @@ class ExamController:
         self.end_time = None
         self.running = True
         self.locked = False
+        self.active_slots = {rider.slot for rider in self.active_riders()}
         self.samples.clear()
         for rider in self.riders:
-            rider.begin_exam(now)
-            self._record_sample(rider, now)
+            if rider.slot in self.active_slots:
+                rider.begin_exam(now)
+                self._record_sample(rider, now)
+            else:
+                rider.reset_exam()
         return True, "考试开始"
 
     def terminate(self) -> tuple[bool, str]:
@@ -120,6 +157,7 @@ class ExamController:
         self.exam_id = ""
         self.start_time = None
         self.end_time = None
+        self.active_slots.clear()
         self.samples.clear()
         for rider in self.riders:
             rider.reset_exam()
@@ -136,9 +174,23 @@ class ExamController:
     def update_power(self, slot: int, power: int, timestamp: float | None = None) -> None:
         now = timestamp or time.time()
         rider = self.rider(slot)
-        rider.advance_simulation(now, self.route_profile)
+        if rider.final_status == "completed":
+            return
+        rider.advance_simulation(
+            now,
+            self.route_profile,
+            bike_weight_kg=self.bike_weight_kg,
+            loop_route=self.exam_mode == EXAM_MODE_TIME,
+            finish_distance_m=self._finish_distance_m(),
+        )
         accepted = rider.add_power(now, power)
-        rider.advance_simulation(now, self.route_profile)
+        rider.advance_simulation(
+            now,
+            self.route_profile,
+            bike_weight_kg=self.bike_weight_kg,
+            loop_route=self.exam_mode == EXAM_MODE_TIME,
+            finish_distance_m=self._finish_distance_m(),
+        )
         if self.running and accepted:
             self._record_sample(rider, now)
 
@@ -149,15 +201,31 @@ class ExamController:
         current = now or time.time()
         elapsed = current - (self.start_time or current)
         for rider in self.riders:
-            rider.advance_simulation(current, self.route_profile)
+            if rider.slot not in self.active_slots or not rider.exam_running:
+                continue
+            route_finished = rider.advance_simulation(
+                current,
+                self.route_profile,
+                bike_weight_kg=self.bike_weight_kg,
+                loop_route=self.exam_mode == EXAM_MODE_TIME,
+                finish_distance_m=self._finish_distance_m(),
+            )
             rider.check_dropout(current)
             second = int(elapsed)
             if second != rider.last_periodic_second:
                 rider.last_periodic_second = second
                 self._record_sample(rider, current)
+            if route_finished and self.exam_mode == EXAM_MODE_ROUTE:
+                self._finish_rider(rider, current, "completed")
 
-        if elapsed >= self.duration_seconds:
+        if self.exam_mode == EXAM_MODE_TIME and elapsed >= self.duration_seconds:
             self._finish(aborted=False, end_time=(self.start_time or current) + self.duration_seconds)
+            return True
+        if self.exam_mode == EXAM_MODE_ROUTE and self._all_active_riders_finished():
+            self.running = False
+            self.locked = True
+            self.ready = False
+            self.end_time = current
             return True
         return False
 
@@ -172,6 +240,9 @@ class ExamController:
             rider.summary_row(
                 self.exam_id,
                 self.duration_seconds,
+                self.exam_mode,
+                self._finish_distance_m() or self.route_profile.total_distance_m,
+                self.bike_weight_kg,
                 self.start_time,
                 self.end_time,
             )
@@ -189,9 +260,37 @@ class ExamController:
         self.end_time = finish_time
         status = "aborted" if aborted else "completed"
         for rider in self.riders:
-            rider.advance_simulation(finish_time, self.route_profile)
-            rider.finish_exam(finish_time, status)
-            self._record_sample(rider, finish_time)
+            if rider.slot not in self.active_slots:
+                continue
+            if rider.final_status == "completed" and aborted:
+                continue
+            if rider.exam_running:
+                rider.advance_simulation(
+                    finish_time,
+                    self.route_profile,
+                    bike_weight_kg=self.bike_weight_kg,
+                    loop_route=self.exam_mode == EXAM_MODE_TIME,
+                    finish_distance_m=self._finish_distance_m(),
+                )
+                rider.finish_exam(finish_time, status)
+                self._record_sample(rider, finish_time)
+
+    def _finish_rider(self, rider: RiderState, finish_time: float, status: str) -> None:
+        if not rider.exam_running:
+            return
+        rider.finish_exam(finish_time, status)
+        self._record_sample(rider, finish_time)
+
+    def _all_active_riders_finished(self) -> bool:
+        if not self.active_slots:
+            return False
+        return all(not self.rider(slot).exam_running for slot in self.active_slots)
+
+    def _finish_distance_m(self) -> float | None:
+        if self.exam_mode != EXAM_MODE_ROUTE:
+            return None
+        total = self.route_profile.total_distance_m
+        return total if total > 0 else None
 
     def _record_sample(self, rider: RiderState, timestamp: float) -> None:
         if not self.exam_id or self.start_time is None:
@@ -206,6 +305,8 @@ class ExamController:
                 simulated_speed_kph=rider.simulated_speed_kph,
                 simulated_distance_m=rider.simulated_distance_m,
                 grade_percent=rider.current_grade_percent,
+                segment_index=rider.current_segment_index,
+                segment_progress=rider.current_segment_progress,
                 heart_rate_bpm=None
                 if rider.heart_rate_metrics.current_value is None
                 else int(rider.heart_rate_metrics.current_value),

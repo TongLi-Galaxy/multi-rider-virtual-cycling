@@ -5,7 +5,7 @@ from datetime import datetime
 
 from app.core.metrics import PowerMetrics, TimeWeightedMetric
 from app.core.route import RouteProfile
-from app.core.simulation import estimate_heart_rate, estimate_speed_kph
+from app.core.simulation import advance_speed_mps, estimate_heart_rate
 
 
 STATUS_DISCONNECTED = "未连接"
@@ -57,6 +57,8 @@ class SampleRecord:
     simulated_speed_kph: float
     simulated_distance_m: float
     grade_percent: float
+    segment_index: int
+    segment_progress: float
     heart_rate_bpm: int | None
     status: str
 
@@ -70,6 +72,8 @@ class SampleRecord:
             "simulated_speed_kph": round(self.simulated_speed_kph, 2),
             "simulated_distance_m": round(self.simulated_distance_m, 2),
             "grade_percent": round(self.grade_percent, 2),
+            "segment_index": self.segment_index,
+            "segment_progress": round(self.segment_progress, 4),
             "heart_rate_bpm": "" if self.heart_rate_bpm is None else self.heart_rate_bpm,
             "status": self.status,
         }
@@ -88,8 +92,14 @@ class RiderState:
     metrics: PowerMetrics = field(default_factory=PowerMetrics)
     heart_rate_metrics: TimeWeightedMetric = field(default_factory=TimeWeightedMetric)
     simulated_speed_kph: float = 0.0
+    simulated_speed_mps: float = 0.0
     simulated_distance_m: float = 0.0
     current_grade_percent: float = 0.0
+    current_segment_index: int = 1
+    total_segments: int = 1
+    current_segment_progress: float = 0.0
+    current_segment_distance_m: float = 0.0
+    current_segment_length_m: float = 1.0
     last_simulation_timestamp: float | None = None
     last_power_timestamp: float | None = None
     dropout_started_at: float | None = None
@@ -121,8 +131,14 @@ class RiderState:
         self.metrics.reset()
         self.heart_rate_metrics.reset()
         self.simulated_speed_kph = 0.0
+        self.simulated_speed_mps = 0.0
         self.simulated_distance_m = 0.0
         self.current_grade_percent = 0.0
+        self.current_segment_index = 1
+        self.total_segments = 1
+        self.current_segment_progress = 0.0
+        self.current_segment_distance_m = 0.0
+        self.current_segment_length_m = 1.0
         self.last_simulation_timestamp = None
         self.last_power_timestamp = None
         self.dropout_started_at = None
@@ -153,20 +169,43 @@ class RiderState:
         self.metrics.lock()
         self.heart_rate_metrics.lock()
 
-    def advance_simulation(self, now: float, route: RouteProfile) -> None:
+    def advance_simulation(
+        self,
+        now: float,
+        route: RouteProfile,
+        bike_weight_kg: float = 10.0,
+        loop_route: bool = True,
+        finish_distance_m: float | None = None,
+    ) -> bool:
+        if self.final_status == "completed":
+            return False
         if self.last_simulation_timestamp is None:
             self.last_simulation_timestamp = now
 
         dt = max(0.0, now - self.last_simulation_timestamp)
         if self.exam_running and dt > 0:
-            self.simulated_distance_m += (self.simulated_speed_kph / 3.6) * dt
+            self.simulated_distance_m += self.simulated_speed_mps * dt
+            if finish_distance_m is not None and self.simulated_distance_m >= finish_distance_m:
+                self.simulated_distance_m = finish_distance_m
 
-        self.current_grade_percent = route.grade_at(self.simulated_distance_m)
-        self.simulated_speed_kph = estimate_speed_kph(
+        self.current_grade_percent = route.grade_at(self.simulated_distance_m, loop=loop_route)
+        self.simulated_speed_mps = advance_speed_mps(
+            self.simulated_speed_mps,
             self.metrics.current_power,
             self.weight_kg,
+            bike_weight_kg,
             self.current_grade_percent,
+            dt,
         )
+        self.simulated_speed_kph = round(self.simulated_speed_mps * 3.6, 2)
+        (
+            self.current_segment_index,
+            self.total_segments,
+            self.current_segment_distance_m,
+            self.current_segment_length_m,
+            self.current_segment_progress,
+        ) = route.segment_progress_at(self.simulated_distance_m, loop=loop_route)
+
         heart_rate = estimate_heart_rate(
             self.metrics.current_power,
             self.weight_kg,
@@ -178,6 +217,7 @@ class RiderState:
             self.heart_rate_metrics.current_value = float(heart_rate)
 
         self.last_simulation_timestamp = now
+        return finish_distance_m is not None and self.simulated_distance_m >= finish_distance_m
 
     def update_status(self, status: str, message: str, timestamp: float) -> None:
         self.connection_status = status
@@ -241,9 +281,13 @@ class RiderState:
         self,
         exam_id: str,
         duration_seconds: int,
+        exam_mode: str,
+        route_distance_m: float,
+        bike_weight_kg: float,
         global_start: float | None,
         global_end: float | None,
     ) -> dict[str, object]:
+        end_time = self.end_time if self.end_time is not None else global_end
         return {
             "exam_id": exam_id,
             "rider_slot": self.slot,
@@ -251,20 +295,23 @@ class RiderState:
             "device_name": self.device_name,
             "device_address": self.device_address,
             "weight_kg": round(self.weight_kg, 1),
+            "bike_weight_kg": round(bike_weight_kg, 1),
+            "exam_mode": exam_mode,
             "duration_seconds": duration_seconds,
+            "route_distance_m": round(route_distance_m, 2),
             "average_power": round(self.metrics.average_power, 2),
             "max_power": "" if self.metrics.max_power is None else self.metrics.max_power,
             "average_heart_rate": round(self.heart_rate_metrics.average_value, 1),
             "max_heart_rate": "" if self.heart_rate_metrics.max_value is None else int(self.heart_rate_metrics.max_value),
             "simulated_distance_m": round(self.simulated_distance_m, 2),
             "average_speed_kph": round((self.simulated_distance_m / elapsed * 3.6), 2)
-            if (elapsed := self.elapsed_at(global_end)) > 0
+            if (elapsed := self.elapsed_at(end_time)) > 0
             else 0.0,
             "valid_time": round(self.metrics.valid_time, 3),
-            "dropout_time": round(self.dropout_time_at(global_end), 3),
+            "dropout_time": round(self.dropout_time_at(end_time), 3),
             "status": self.final_status,
             "start_time": _format_timestamp(global_start),
-            "end_time": _format_timestamp(global_end),
+            "end_time": _format_timestamp(end_time),
         }
 
 

@@ -47,6 +47,50 @@ def estimate_speed_kph(
     return round(min(high * 3.6, 110.0), 2)
 
 
+def advance_speed_mps(
+    current_speed_mps: float,
+    power_watts: int | float | None,
+    rider_weight_kg: float,
+    bike_weight_kg: float,
+    grade_percent: float,
+    dt: float,
+    cda: float = 0.32,
+    crr: float = 0.004,
+    air_density: float = 1.225,
+    drivetrain_efficiency: float = 0.97,
+) -> float:
+    """Advance speed with a simple inertia-aware cycling physics model."""
+    if dt <= 0:
+        return max(0.0, current_speed_mps)
+
+    power = max(0.0, float(power_watts or 0.0)) * drivetrain_efficiency
+    rider_weight = min(200.0, max(30.0, float(rider_weight_kg)))
+    bike_weight = min(30.0, max(5.0, float(bike_weight_kg)))
+    total_mass = rider_weight + bike_weight
+    grade = min(25.0, max(-20.0, float(grade_percent))) / 100.0
+    angle = math.atan(grade)
+    speed = max(0.0, float(current_speed_mps))
+
+    # Convert power to tractive force. Clamp the very low-speed region so a
+    # standing start accelerates smoothly instead of producing unrealistic force.
+    effective_speed = max(speed, 2.0)
+    drive_force = min(power / effective_speed, 900.0)
+
+    gravity_force = total_mass * 9.80665 * math.sin(angle)
+    rolling_force = crr * total_mass * 9.80665 * math.cos(angle)
+    aero_force = 0.5 * air_density * cda * speed * speed
+    net_force = drive_force - gravity_force - rolling_force - aero_force
+
+    acceleration = max(-6.0, min(4.0, net_force / total_mass))
+    next_speed = speed + acceleration * min(dt, 1.0)
+
+    # Avoid fake perpetual motion on flats/uphill when there is no power.
+    if power <= 0 and grade >= 0 and next_speed < 0.08:
+        next_speed = 0.0
+
+    return max(0.0, min(next_speed, 32.0))
+
+
 def estimate_heart_rate(
     power_watts: int | float | None,
     rider_weight_kg: float,
@@ -69,4 +113,3 @@ def estimate_heart_rate(
     # Smooth changes so the mock HR feels like physiology rather than telemetry.
     alpha = 0.18
     return int(round(previous_bpm + (target - previous_bpm) * alpha))
-

@@ -7,11 +7,18 @@ import time
 from PySide6 import QtCore, QtWidgets
 
 from app.ble.device_client import MockTrainerDeviceClient, TrainerDeviceClient
-from app.core.exam_controller import ExamController, default_config_path
+from app.core.exam_controller import (
+    EXAM_MODE_ROUTE,
+    EXAM_MODE_TIME,
+    ExamController,
+    default_config_path,
+)
 from app.core.exporter import export_exam_csv
 from app.core.rider_state import STATUS_CONNECTING, STATUS_DISCONNECTED
 from app.core.route import RouteProfile, RouteSegment, load_route, save_route
+from app.core.settings import AppSettings, load_settings, save_settings
 from app.gui.rider_panel import RiderPanel
+from app.gui.route_profile_widget import RouteProfileWidget
 from app.gui.scan_dialog import ScanDialog
 from app.utils.logger import get_app_logger
 
@@ -130,17 +137,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1180, 760)
 
         self.logger = get_app_logger()
+        self.settings = load_settings()
+        if mock:
+            self.settings.mock_mode = True
         self.controller = ExamController(duration_seconds=60)
         self.route_profile = load_route()
+        self.controller.set_exam_mode(self.settings.exam_mode)
+        self.controller.set_duration(self.settings.duration_seconds)
+        self.controller.set_bike_weight(self.settings.bike_weight_kg)
         self.controller.set_route(self.route_profile)
         self.config_path = default_config_path()
         self.ble_runtime: BleRuntime | None = None
         self.panels: dict[int, RiderPanel] = {}
+        self._settings_table_blocked = False
         self._last_grade_push_at = 0.0
 
-        self._build_ui(mock)
+        self._build_ui()
         self._load_config()
         self._populate_route_table()
+        self._populate_rider_settings_table()
         self._refresh_all_panels()
 
         self.timer = QtCore.QTimer(self)
@@ -148,7 +163,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.timer.timeout.connect(self._on_timer)
         self.timer.start()
 
-    def _build_ui(self, mock: bool) -> None:
+    def _build_ui(self) -> None:
         central = QtWidgets.QWidget()
         root = QtWidgets.QVBoxLayout(central)
         root.setContentsMargins(10, 10, 10, 10)
@@ -156,39 +171,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         controls = QtWidgets.QFrame()
         controls.setObjectName("controlBar")
-        controls_layout = QtWidgets.QGridLayout(controls)
+        controls_layout = QtWidgets.QHBoxLayout(controls)
         controls_layout.setContentsMargins(10, 8, 10, 8)
-        controls_layout.setHorizontalSpacing(8)
-        controls_layout.setVerticalSpacing(6)
+        controls_layout.setSpacing(8)
 
-        self.duration_combo = QtWidgets.QComboBox()
-        for label, seconds in [
-            ("1分钟", 60),
-            ("3分钟", 180),
-            ("5分钟", 300),
-            ("10分钟", 600),
-            ("20分钟", 1200),
-            ("自定义", -1),
-        ]:
-            self.duration_combo.addItem(label, seconds)
-        self.duration_combo.currentIndexChanged.connect(self._duration_changed)
-
-        self.custom_seconds = QtWidgets.QSpinBox()
-        self.custom_seconds.setRange(1, 24 * 3600)
-        self.custom_seconds.setValue(60)
-        self.custom_seconds.setSuffix(" 秒")
-        self.custom_seconds.setVisible(False)
-
-        self.mock_checkbox = QtWidgets.QCheckBox("Mock")
-        self.mock_checkbox.setChecked(mock)
-
-        self.push_grade_checkbox = QtWidgets.QCheckBox("推送坡度")
-        self.push_grade_checkbox.setChecked(True)
-
-        self.scan_button = QtWidgets.QPushButton("扫描/绑定")
-        self.scan_button.clicked.connect(self._open_scan_dialog)
-        self.connect_button = QtWidgets.QPushButton("连接设备")
-        self.connect_button.clicked.connect(self._connect_devices)
         self.prepare_button = QtWidgets.QPushButton("准备考试")
         self.prepare_button.clicked.connect(self._prepare_exam)
         self.start_button = QtWidgets.QPushButton("开始考试")
@@ -203,29 +189,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.export_button.clicked.connect(self._export_csv)
         self.export_button.setEnabled(False)
 
-        controls_layout.addWidget(QtWidgets.QLabel("考试时长"), 0, 0)
-        controls_layout.addWidget(self.duration_combo, 0, 1)
-        controls_layout.addWidget(self.custom_seconds, 0, 2)
-        controls_layout.addWidget(self.mock_checkbox, 0, 3)
-        controls_layout.addWidget(self.push_grade_checkbox, 0, 4)
-        controls_layout.setColumnStretch(5, 1)
-
-        for index, button in enumerate(
-            [
-                self.scan_button,
-                self.connect_button,
-                self.prepare_button,
-                self.start_button,
-                self.stop_button,
-                self.reset_button,
-                self.export_button,
-            ]
-        ):
-            controls_layout.addWidget(button, 1, index)
+        self.mode_status_label = QtWidgets.QLabel("")
+        controls_layout.addWidget(self.mode_status_label)
+        controls_layout.addStretch(1)
+        for button in [
+            self.prepare_button,
+            self.start_button,
+            self.stop_button,
+            self.reset_button,
+            self.export_button,
+        ]:
+            controls_layout.addWidget(button)
 
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.addTab(self._build_exam_page(), "考试")
         self.tabs.addTab(self._build_route_page(), "赛道")
+        self.tabs.addTab(self._build_settings_page(), "设置")
         self.tabs.addTab(self._build_log_page(), "日志")
 
         root.addWidget(controls)
@@ -250,6 +229,7 @@ class MainWindow(QtWidgets.QMainWindow):
             panel = RiderPanel(slot)
             panel.rider_name_changed.connect(self._rider_name_changed)
             panel.rider_weight_changed.connect(self._rider_weight_changed)
+            panel.set_inputs_locked(True)
             self.panels[slot] = panel
             panels_grid.addWidget(panel, (slot - 1) // 2, (slot - 1) % 2)
         panels_grid.setRowStretch(0, 1)
@@ -266,6 +246,9 @@ class MainWindow(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
+
+        self.route_profile_widget = RouteProfileWidget()
+        self.route_profile_widget.set_route(self.route_profile)
 
         self.route_table = QtWidgets.QTableWidget(0, 2)
         self.route_table.setHorizontalHeaderLabels(["距离 m", "坡度 %"])
@@ -295,8 +278,99 @@ class MainWindow(QtWidgets.QMainWindow):
         button_row.addStretch(1)
         button_row.addWidget(self.route_total_label)
 
+        layout.addWidget(self.route_profile_widget)
         layout.addWidget(self.route_table, 1)
         layout.addLayout(button_row)
+        return page
+
+    def _build_settings_page(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
+
+        exam_box = QtWidgets.QGroupBox("考试设置")
+        exam_layout = QtWidgets.QGridLayout(exam_box)
+        exam_layout.setHorizontalSpacing(10)
+        exam_layout.setVerticalSpacing(8)
+
+        self.exam_mode_combo = QtWidgets.QComboBox()
+        self.exam_mode_combo.addItem("固定时长", EXAM_MODE_TIME)
+        self.exam_mode_combo.addItem("固定线路", EXAM_MODE_ROUTE)
+        self.exam_mode_combo.currentIndexChanged.connect(self._settings_changed)
+
+        self.duration_combo = QtWidgets.QComboBox()
+        for label, seconds in [
+            ("1分钟", 60),
+            ("3分钟", 180),
+            ("5分钟", 300),
+            ("10分钟", 600),
+            ("20分钟", 1200),
+            ("自定义", -1),
+        ]:
+            self.duration_combo.addItem(label, seconds)
+        self.duration_combo.currentIndexChanged.connect(self._duration_changed)
+
+        self.custom_seconds = QtWidgets.QSpinBox()
+        self.custom_seconds.setRange(1, 24 * 3600)
+        self.custom_seconds.setValue(self.settings.duration_seconds)
+        self.custom_seconds.setSuffix(" 秒")
+        self.custom_seconds.valueChanged.connect(self._settings_changed)
+
+        self.bike_weight_spin = QtWidgets.QDoubleSpinBox()
+        self.bike_weight_spin.setRange(5.0, 30.0)
+        self.bike_weight_spin.setDecimals(1)
+        self.bike_weight_spin.setSingleStep(0.5)
+        self.bike_weight_spin.setSuffix(" kg")
+        self.bike_weight_spin.setValue(self.settings.bike_weight_kg)
+        self.bike_weight_spin.valueChanged.connect(self._settings_changed)
+
+        self.mock_checkbox = QtWidgets.QCheckBox("Mock 模式")
+        self.mock_checkbox.setChecked(self.settings.mock_mode)
+        self.mock_checkbox.stateChanged.connect(self._settings_changed)
+
+        self.push_grade_checkbox = QtWidgets.QCheckBox("推送坡度到骑行台")
+        self.push_grade_checkbox.setChecked(self.settings.push_grade)
+        self.push_grade_checkbox.stateChanged.connect(self._settings_changed)
+
+        exam_layout.addWidget(QtWidgets.QLabel("模式"), 0, 0)
+        exam_layout.addWidget(self.exam_mode_combo, 0, 1)
+        exam_layout.addWidget(QtWidgets.QLabel("时长"), 0, 2)
+        exam_layout.addWidget(self.duration_combo, 0, 3)
+        exam_layout.addWidget(self.custom_seconds, 0, 4)
+        exam_layout.addWidget(QtWidgets.QLabel("整车自重"), 1, 0)
+        exam_layout.addWidget(self.bike_weight_spin, 1, 1)
+        exam_layout.addWidget(self.mock_checkbox, 1, 2)
+        exam_layout.addWidget(self.push_grade_checkbox, 1, 3, 1, 2)
+        exam_layout.setColumnStretch(5, 1)
+
+        device_box = QtWidgets.QGroupBox("设备与选手")
+        device_layout = QtWidgets.QVBoxLayout(device_box)
+        device_buttons = QtWidgets.QHBoxLayout()
+        self.scan_button = QtWidgets.QPushButton("扫描/绑定")
+        self.scan_button.clicked.connect(self._open_scan_dialog)
+        self.connect_button = QtWidgets.QPushButton("连接设备")
+        self.connect_button.clicked.connect(self._connect_devices)
+        device_buttons.addWidget(self.scan_button)
+        device_buttons.addWidget(self.connect_button)
+        device_buttons.addStretch(1)
+
+        self.rider_settings_table = QtWidgets.QTableWidget(4, 5)
+        self.rider_settings_table.setHorizontalHeaderLabels(
+            ["分屏", "选手名", "体重 kg", "设备", "地址"]
+        )
+        self.rider_settings_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.rider_settings_table.verticalHeader().setVisible(False)
+        self.rider_settings_table.itemChanged.connect(self._rider_settings_item_changed)
+
+        device_layout.addLayout(device_buttons)
+        device_layout.addWidget(self.rider_settings_table)
+
+        layout.addWidget(exam_box)
+        layout.addWidget(device_box, 1)
+        self._apply_settings_to_widgets()
         return page
 
     def _build_log_page(self) -> QtWidgets.QWidget:
@@ -322,6 +396,25 @@ class MainWindow(QtWidgets.QMainWindow):
         QTabWidget::pane {
             border: 1px solid #d9e0e7;
             background: #f4f6f8;
+        }
+        QGroupBox {
+            background: #ffffff;
+            border: 1px solid #d9e0e7;
+            border-radius: 6px;
+            margin-top: 10px;
+            padding: 10px;
+            font-weight: 700;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 4px;
+        }
+        QTableWidget {
+            background: #ffffff;
+            border: 1px solid #d9e0e7;
+            border-radius: 6px;
+            gridline-color: #e8eef2;
         }
         #controlBar, #riderPanel {
             background: #ffffff;
@@ -395,10 +488,98 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _duration_changed(self) -> None:
         self.custom_seconds.setVisible(self.duration_combo.currentData() == -1)
+        self._settings_changed()
 
     def _selected_duration(self) -> int:
         value = int(self.duration_combo.currentData())
         return int(self.custom_seconds.value()) if value == -1 else value
+
+    def _apply_settings_to_widgets(self) -> None:
+        mode_index = self.exam_mode_combo.findData(self.settings.exam_mode)
+        self.exam_mode_combo.setCurrentIndex(max(0, mode_index))
+
+        duration_index = self.duration_combo.findData(self.settings.duration_seconds)
+        if duration_index >= 0:
+            self.duration_combo.setCurrentIndex(duration_index)
+        else:
+            custom_index = self.duration_combo.findData(-1)
+            self.duration_combo.setCurrentIndex(custom_index)
+            self.custom_seconds.setValue(self.settings.duration_seconds)
+        self.custom_seconds.setVisible(self.duration_combo.currentData() == -1)
+        self.bike_weight_spin.setValue(self.settings.bike_weight_kg)
+        self.mock_checkbox.setChecked(self.settings.mock_mode)
+        self.push_grade_checkbox.setChecked(self.settings.push_grade)
+        duration_enabled = self.settings.exam_mode == EXAM_MODE_TIME
+        self.duration_combo.setEnabled(duration_enabled)
+        self.custom_seconds.setEnabled(duration_enabled)
+        self._update_mode_status_label()
+
+    def _settings_changed(self) -> None:
+        if not hasattr(self, "exam_mode_combo"):
+            return
+        self.settings = AppSettings(
+            exam_mode=str(self.exam_mode_combo.currentData() or EXAM_MODE_TIME),
+            duration_seconds=self._selected_duration(),
+            bike_weight_kg=float(self.bike_weight_spin.value()),
+            mock_mode=self.mock_checkbox.isChecked(),
+            push_grade=self.push_grade_checkbox.isChecked(),
+        )
+        self.controller.set_exam_mode(self.settings.exam_mode)
+        self.controller.set_duration(self.settings.duration_seconds)
+        self.controller.set_bike_weight(self.settings.bike_weight_kg)
+        save_settings(self.settings)
+        duration_enabled = self.settings.exam_mode == EXAM_MODE_TIME
+        self.duration_combo.setEnabled(duration_enabled)
+        self.custom_seconds.setEnabled(duration_enabled)
+        if hasattr(self, "route_total_label"):
+            self._update_route_total_label()
+        self._update_mode_status_label()
+        self._refresh_all_panels()
+
+    def _update_mode_status_label(self) -> None:
+        if not hasattr(self, "mode_status_label"):
+            return
+        if self.settings.exam_mode == EXAM_MODE_ROUTE:
+            text = f"固定线路 | {self.route_profile.total_distance_m:.0f} m | 车重 {self.settings.bike_weight_kg:.1f} kg"
+        else:
+            text = f"固定时长 | {self.settings.duration_seconds} 秒 | 车重 {self.settings.bike_weight_kg:.1f} kg"
+        self.mode_status_label.setText(text)
+
+    def _populate_rider_settings_table(self) -> None:
+        if not hasattr(self, "rider_settings_table"):
+            return
+        self._settings_table_blocked = True
+        for row, rider in enumerate(self.controller.riders):
+            values = [
+                f"{rider.slot}号",
+                rider.rider_name,
+                f"{rider.weight_kg:.1f}",
+                rider.device_name,
+                rider.device_address,
+            ]
+            for column, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                if column in {0, 3, 4}:
+                    item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
+                self.rider_settings_table.setItem(row, column, item)
+        self._settings_table_blocked = False
+
+    def _rider_settings_item_changed(self, item: QtWidgets.QTableWidgetItem) -> None:
+        if self._settings_table_blocked:
+            return
+        slot = item.row() + 1
+        if item.column() == 1:
+            self.controller.set_rider_name(slot, item.text())
+        elif item.column() == 2:
+            try:
+                self.controller.set_rider_weight(slot, float(item.text()))
+            except ValueError:
+                self._populate_rider_settings_table()
+                return
+        else:
+            return
+        self._save_config()
+        self._refresh_panel(slot)
 
     def _load_config(self) -> None:
         try:
@@ -427,6 +608,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.route_table.setRowCount(0)
         for segment in self.route_profile.segments:
             self._insert_route_row(segment.distance_m, segment.grade_percent)
+        self.route_profile_widget.set_route(self.route_profile)
         self._update_route_total_label()
 
     def _insert_route_row(self, distance_m: float, grade_percent: float) -> None:
@@ -477,7 +659,9 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.route_profile = self._route_from_table()
             self.controller.set_route(self.route_profile)
+            self.route_profile_widget.set_route(self.route_profile)
             self._update_route_total_label()
+            self._update_mode_status_label()
             self._refresh_all_panels()
             self._log("赛道已应用")
         except Exception as exc:
@@ -492,7 +676,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.route_profile = self._route_from_table()
             save_route(self.route_profile)
             self.controller.set_route(self.route_profile)
+            self.route_profile_widget.set_route(self.route_profile)
             self._update_route_total_label()
+            self._update_mode_status_label()
             self._log("赛道已保存")
         except Exception as exc:
             QtWidgets.QMessageBox.warning(self, "保存失败", str(exc))
@@ -503,7 +689,9 @@ class MainWindow(QtWidgets.QMainWindow):
             total = self._route_from_table().total_distance_m
         except Exception:
             total = self.route_profile.total_distance_m
-        self.route_total_label.setText(f"总长 {total:.0f} m，循环使用")
+        suffix = "固定终点" if self.settings.exam_mode == EXAM_MODE_ROUTE else "循环使用"
+        self.route_total_label.setText(f"总长 {total:.0f} m，{suffix}")
+        self._update_mode_status_label()
 
     def _set_route_controls_enabled(self, enabled: bool) -> None:
         for widget in [
@@ -514,6 +702,23 @@ class MainWindow(QtWidgets.QMainWindow):
             self.save_route_button,
         ]:
             widget.setEnabled(enabled)
+
+    def _set_settings_controls_enabled(self, enabled: bool) -> None:
+        for widget in [
+            self.exam_mode_combo,
+            self.duration_combo,
+            self.custom_seconds,
+            self.bike_weight_spin,
+            self.mock_checkbox,
+            self.push_grade_checkbox,
+            self.rider_settings_table,
+            self.scan_button,
+            self.connect_button,
+        ]:
+            widget.setEnabled(enabled)
+        if enabled and self.settings.exam_mode == EXAM_MODE_ROUTE:
+            self.duration_combo.setEnabled(False)
+            self.custom_seconds.setEnabled(False)
 
     def _open_scan_dialog(self) -> None:
         if self.controller.running:
@@ -531,6 +736,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.controller.bind_device(slot, device)
         self._save_config()
+        self._populate_rider_settings_table()
         self._refresh_panel(slot)
         self._log(f"{slot}号分屏已绑定 {device.get('name') or device.get('address')}")
 
@@ -554,6 +760,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     },
                 )
                 self.controller.rider(slot).weight_kg = rider.weight_kg
+            self._populate_rider_settings_table()
 
         for rider in self.controller.riders:
             if rider.device_address:
@@ -571,6 +778,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _prepare_exam(self) -> None:
         self._sync_rider_inputs()
+        self._settings_changed()
         self.controller.set_duration(self._selected_duration())
         ok, message = self.controller.prepare()
         self.start_button.setEnabled(ok)
@@ -578,6 +786,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _start_exam(self) -> None:
         self._sync_rider_inputs()
+        self._settings_changed()
         self.controller.set_duration(self._selected_duration())
         ok, message = self.controller.start()
         if not ok:
@@ -590,6 +799,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stop_button.setEnabled(True)
         self.export_button.setEnabled(False)
         self._set_route_controls_enabled(False)
+        self._set_settings_controls_enabled(False)
         for panel in self.panels.values():
             panel.set_inputs_locked(True)
         self._log(message)
@@ -610,8 +820,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.connect_button.setEnabled(True)
         self.prepare_button.setEnabled(True)
         self._set_route_controls_enabled(True)
+        self._set_settings_controls_enabled(True)
         for panel in self.panels.values():
-            panel.set_inputs_locked(False)
+            panel.set_inputs_locked(True)
         self._refresh_all_panels()
         self._log("考试数据已重置")
 
@@ -663,8 +874,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stop_button.setEnabled(False)
         self.export_button.setEnabled(True)
         self._set_route_controls_enabled(True)
+        self._set_settings_controls_enabled(True)
         for panel in self.panels.values():
-            panel.set_inputs_locked(False)
+            panel.set_inputs_locked(True)
         self._refresh_all_panels()
 
     def _rider_name_changed(self, slot: int, name: str) -> None:
@@ -677,20 +889,33 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_panel(slot)
 
     def _sync_rider_inputs(self) -> None:
-        for slot, panel in self.panels.items():
-            self.controller.set_rider_name(slot, panel.name_edit.text())
-            self.controller.set_rider_weight(slot, panel.weight_spin.value())
+        if hasattr(self, "rider_settings_table"):
+            for row in range(self.rider_settings_table.rowCount()):
+                slot = row + 1
+                name_item = self.rider_settings_table.item(row, 1)
+                weight_item = self.rider_settings_table.item(row, 2)
+                if name_item:
+                    self.controller.set_rider_name(slot, name_item.text())
+                if weight_item:
+                    try:
+                        self.controller.set_rider_weight(slot, float(weight_item.text()))
+                    except ValueError:
+                        pass
         self._save_config()
 
     def _refresh_panel(self, slot: int) -> None:
         rider = self.controller.rider(slot)
         now = time.time()
-        elapsed = self.controller.current_elapsed(now)
+        elapsed = rider.elapsed_at(now) if rider.start_time is not None else self.controller.current_elapsed(now)
         self.panels[slot].update_from_rider(rider, elapsed, now)
 
     def _refresh_all_panels(self) -> None:
         for slot in range(1, 5):
             self._refresh_panel(slot)
+        if hasattr(self, "route_profile_widget"):
+            self.route_profile_widget.set_rider_distances(
+                {rider.slot: rider.simulated_distance_m for rider in self.controller.riders}
+            )
 
     def _log(self, message: str) -> None:
         timestamp = time.strftime("%H:%M:%S")

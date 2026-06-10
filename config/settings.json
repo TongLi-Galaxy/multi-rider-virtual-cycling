@@ -1,0 +1,7 @@
+{
+  "exam_mode": "route",
+  "duration_seconds": 60,
+  "bike_weight_kg": 10.0,
+  "mock_mode": true,
+  "push_grade": true
+}
