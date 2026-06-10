@@ -1,0 +1,52 @@
+{
+  "slots": [
+    {
+      "slot": 1,
+      "rider_name": "",
+      "device_name": "Think X202-0023746",
+      "device_address": "D5:8C:2F:C3:A2:57",
+      "service_uuids": [
+        "00001818-0000-1000-8000-00805f9b34fb",
+        "0000fff0-0000-1000-8000-00805f9b34fb",
+        "6e40fec1-b5a3-f393-e0a9-e50e24dcca9e"
+      ],
+      "weight_kg": 67.0
+    },
+    {
+      "slot": 2,
+      "rider_name": "",
+      "device_name": "Think X202-0008772",
+      "device_address": "FC:0E:4F:98:78:86",
+      "service_uuids": [
+        "00001818-0000-1000-8000-00805f9b34fb",
+        "0000fff0-0000-1000-8000-00805f9b34fb",
+        "6e40fec1-b5a3-f393-e0a9-e50e24dcca9e"
+      ],
+      "weight_kg": 70.0
+    },
+    {
+      "slot": 3,
+      "rider_name": "",
+      "device_name": "Think X202-0026990",
+      "device_address": "E6:6B:5C:50:45:72",
+      "service_uuids": [
+        "00001818-0000-1000-8000-00805f9b34fb",
+        "0000fff0-0000-1000-8000-00805f9b34fb",
+        "6e40fec1-b5a3-f393-e0a9-e50e24dcca9e"
+      ],
+      "weight_kg": 200.0
+    },
+    {
+      "slot": 4,
+      "rider_name": "",
+      "device_name": "Think X202-0021540",
+      "device_address": "E4:0A:F3:E0:26:5B",
+      "service_uuids": [
+        "00001818-0000-1000-8000-00805f9b34fb",
+        "0000fff0-0000-1000-8000-00805f9b34fb",
+        "6e40fec1-b5a3-f393-e0a9-e50e24dcca9e"
+      ],
+      "weight_kg": 70.0
+    }
+  ]
+}

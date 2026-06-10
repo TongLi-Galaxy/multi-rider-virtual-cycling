@@ -1,0 +1,2 @@
+"""Cycling power exam application."""
+

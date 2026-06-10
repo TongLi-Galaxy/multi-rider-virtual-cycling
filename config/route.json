@@ -1,0 +1,24 @@
+{
+  "segments": [
+    {
+      "distance_m": 400.0,
+      "grade_percent": 5.0
+    },
+    {
+      "distance_m": 300.0,
+      "grade_percent": 2.0
+    },
+    {
+      "distance_m": 250.0,
+      "grade_percent": 5.0
+    },
+    {
+      "distance_m": 300.0,
+      "grade_percent": -2.0
+    },
+    {
+      "distance_m": 450.0,
+      "grade_percent": 0.5
+    }
+  ]
+}
