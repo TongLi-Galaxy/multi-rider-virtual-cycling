@@ -91,10 +91,26 @@ class RouteProfileWidget(QtWidgets.QWidget):
             color = QtGui.QColor(colors[(slot - 1) % len(colors)])
             painter.setBrush(color)
             painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 2))
-            painter.drawEllipse(center, 6, 6)
+            marker_radius = 9
+            painter.drawEllipse(center, marker_radius, marker_radius)
+            painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 1))
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(8)
+            painter.setFont(font)
+            painter.drawText(
+                QtCore.QRectF(
+                    center.x() - marker_radius,
+                    center.y() - marker_radius,
+                    marker_radius * 2,
+                    marker_radius * 2,
+                ),
+                QtCore.Qt.AlignmentFlag.AlignCenter,
+                str(slot),
+            )
             painter.setPen(QtGui.QPen(color.darker(130), 1))
             painter.drawLine(
-                QtCore.QPointF(center.x(), center.y() + 7),
+                QtCore.QPointF(center.x(), center.y() + marker_radius + 1),
                 QtCore.QPointF(center.x(), baseline_y),
             )
             _ = grade

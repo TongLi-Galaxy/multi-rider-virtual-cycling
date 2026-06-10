@@ -150,6 +150,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ble_runtime: BleRuntime | None = None
         self.panels: dict[int, RiderPanel] = {}
         self._settings_table_blocked = False
+        self._applying_settings_widgets = False
         self._last_grade_push_at = 0.0
 
         self._build_ui()
@@ -157,6 +158,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._populate_route_table()
         self._populate_rider_settings_table()
         self._refresh_all_panels()
+        self._update_exam_route_visibility()
 
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(250)
@@ -216,6 +218,12 @@ class MainWindow(QtWidgets.QMainWindow):
         page = QtWidgets.QWidget()
         page_layout = QtWidgets.QVBoxLayout(page)
         page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(8)
+
+        self.exam_route_profile_widget = RouteProfileWidget()
+        self.exam_route_profile_widget.setMinimumHeight(150)
+        self.exam_route_profile_widget.setMaximumHeight(180)
+        self.exam_route_profile_widget.set_route(self.route_profile)
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -238,6 +246,7 @@ class MainWindow(QtWidgets.QMainWindow):
         panels_grid.setColumnStretch(1, 1)
 
         scroll.setWidget(container)
+        page_layout.addWidget(self.exam_route_profile_widget)
         page_layout.addWidget(scroll)
         return page
 
@@ -425,6 +434,15 @@ class MainWindow(QtWidgets.QMainWindow):
             font-size: 19px;
             font-weight: 700;
         }
+        #riderNameLabel {
+            font-size: 16px;
+            font-weight: 700;
+            color: #172026;
+        }
+        #riderWeightLabel {
+            color: #64727d;
+            font-weight: 600;
+        }
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
             min-height: 28px;
             padding: 1px 6px;
@@ -464,6 +482,23 @@ class MainWindow(QtWidgets.QMainWindow):
         #fieldValue {
             font-weight: 600;
         }
+        #routeProgress {
+            min-height: 16px;
+            max-height: 18px;
+            border: 1px solid #c7d3dc;
+            border-radius: 4px;
+            background: #edf2f4;
+            text-align: center;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        #routeProgress::chunk {
+            background: #74b72e;
+            border-radius: 3px;
+        }
+        #statusDot {
+            min-width: 14px;
+        }
         QLabel[status="数据正常"] {
             color: #147a3d;
         }
@@ -495,6 +530,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return int(self.custom_seconds.value()) if value == -1 else value
 
     def _apply_settings_to_widgets(self) -> None:
+        self._applying_settings_widgets = True
         mode_index = self.exam_mode_combo.findData(self.settings.exam_mode)
         self.exam_mode_combo.setCurrentIndex(max(0, mode_index))
 
@@ -513,9 +549,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.duration_combo.setEnabled(duration_enabled)
         self.custom_seconds.setEnabled(duration_enabled)
         self._update_mode_status_label()
+        self._applying_settings_widgets = False
 
     def _settings_changed(self) -> None:
         if not hasattr(self, "exam_mode_combo"):
+            return
+        if self._applying_settings_widgets:
             return
         self.settings = AppSettings(
             exam_mode=str(self.exam_mode_combo.currentData() or EXAM_MODE_TIME),
@@ -609,6 +648,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for segment in self.route_profile.segments:
             self._insert_route_row(segment.distance_m, segment.grade_percent)
         self.route_profile_widget.set_route(self.route_profile)
+        self.exam_route_profile_widget.set_route(self.route_profile)
         self._update_route_total_label()
 
     def _insert_route_row(self, distance_m: float, grade_percent: float) -> None:
@@ -660,6 +700,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.route_profile = self._route_from_table()
             self.controller.set_route(self.route_profile)
             self.route_profile_widget.set_route(self.route_profile)
+            self.exam_route_profile_widget.set_route(self.route_profile)
             self._update_route_total_label()
             self._update_mode_status_label()
             self._refresh_all_panels()
@@ -677,6 +718,7 @@ class MainWindow(QtWidgets.QMainWindow):
             save_route(self.route_profile)
             self.controller.set_route(self.route_profile)
             self.route_profile_widget.set_route(self.route_profile)
+            self.exam_route_profile_widget.set_route(self.route_profile)
             self._update_route_total_label()
             self._update_mode_status_label()
             self._log("赛道已保存")
@@ -907,15 +949,30 @@ class MainWindow(QtWidgets.QMainWindow):
         rider = self.controller.rider(slot)
         now = time.time()
         elapsed = rider.elapsed_at(now) if rider.start_time is not None else self.controller.current_elapsed(now)
-        self.panels[slot].update_from_rider(rider, elapsed, now)
+        self.panels[slot].update_from_rider(
+            rider,
+            elapsed,
+            self.route_profile.total_distance_m,
+            now,
+        )
 
     def _refresh_all_panels(self) -> None:
         for slot in range(1, 5):
             self._refresh_panel(slot)
         if hasattr(self, "route_profile_widget"):
-            self.route_profile_widget.set_rider_distances(
-                {rider.slot: rider.simulated_distance_m for rider in self.controller.riders}
-            )
+            distances = {rider.slot: rider.simulated_distance_m for rider in self.controller.riders}
+            self.route_profile_widget.set_rider_distances(distances)
+            self.exam_route_profile_widget.set_rider_distances(distances)
+            self._update_exam_route_visibility()
+
+    def _update_exam_route_visibility(self) -> None:
+        if not hasattr(self, "exam_route_profile_widget"):
+            return
+        self.exam_route_profile_widget.setVisible(self.width() >= 980 and self.height() >= 740)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._update_exam_route_visibility()
 
     def _log(self, message: str) -> None:
         timestamp = time.strftime("%H:%M:%S")
