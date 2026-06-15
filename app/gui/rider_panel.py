@@ -38,15 +38,26 @@ class RiderPanel(QtWidgets.QFrame):
 
         self.name_label = QtWidgets.QLabel("选手")
         self.name_label.setObjectName("riderNameLabel")
-        self.weight_label = QtWidgets.QLabel("70.0 kg")
-        self.weight_label.setObjectName("riderWeightLabel")
+        self._updating_weight = False
+        self._last_emitted_weight: float | None = None
+        self.weight_input = QtWidgets.QDoubleSpinBox()
+        self.weight_input.setObjectName("riderWeightInput")
+        self.weight_input.setRange(30.0, 200.0)
+        self.weight_input.setDecimals(1)
+        self.weight_input.setSingleStep(0.5)
+        self.weight_input.setSuffix(" kg")
+        self.weight_input.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.weight_input.setKeyboardTracking(False)
+        self.weight_input.setFixedWidth(86)
+        self.weight_input.valueChanged.connect(self._weight_value_changed)
+        self.weight_input.editingFinished.connect(self._weight_editing_finished)
 
         header = QtWidgets.QGridLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setHorizontalSpacing(8)
         header.addWidget(title, 0, 0)
         header.addWidget(self.name_label, 0, 1)
-        header.addWidget(self.weight_label, 0, 2)
+        header.addWidget(self.weight_input, 0, 2)
         header.setColumnStretch(1, 1)
 
         self.speed_label = QtWidgets.QLabel("--")
@@ -145,10 +156,31 @@ class RiderPanel(QtWidgets.QFrame):
         self.name_label.setText(name or "选手")
 
     def set_weight(self, weight_kg: float) -> None:
-        self.weight_label.setText(f"{weight_kg:.1f} kg")
+        if self.weight_input.hasFocus():
+            return
+        self._updating_weight = True
+        self.weight_input.setValue(float(weight_kg))
+        self._updating_weight = False
 
     def set_inputs_locked(self, locked: bool) -> None:
-        _ = locked
+        self.weight_input.setEnabled(not locked)
+
+    def _weight_value_changed(self, value: float) -> None:
+        if self._updating_weight:
+            return
+        self._emit_weight_changed(float(value))
+
+    def _weight_editing_finished(self) -> None:
+        if self._updating_weight:
+            return
+        self._emit_weight_changed(float(self.weight_input.value()))
+
+    def _emit_weight_changed(self, value: float) -> None:
+        rounded = round(float(value), 1)
+        if self._last_emitted_weight is not None and abs(rounded - self._last_emitted_weight) < 0.05:
+            return
+        self._last_emitted_weight = rounded
+        self.rider_weight_changed.emit(self.slot, rounded)
 
     def update_from_rider(
         self,

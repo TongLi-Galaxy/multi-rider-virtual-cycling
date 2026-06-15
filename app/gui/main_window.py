@@ -237,7 +237,7 @@ class MainWindow(QtWidgets.QMainWindow):
             panel = RiderPanel(slot)
             panel.rider_name_changed.connect(self._rider_name_changed)
             panel.rider_weight_changed.connect(self._rider_weight_changed)
-            panel.set_inputs_locked(True)
+            panel.set_inputs_locked(False)
             self.panels[slot] = panel
             panels_grid.addWidget(panel, (slot - 1) // 2, (slot - 1) % 2)
         panels_grid.setRowStretch(0, 1)
@@ -410,6 +410,12 @@ class MainWindow(QtWidgets.QMainWindow):
             color: #172026;
             background: #f4f6f8;
         }
+        QLabel, QCheckBox {
+            background: transparent;
+        }
+        #controlBar QLabel, #riderPanel QWidget, #riderPanel QLabel, QGroupBox QLabel, QGroupBox QCheckBox {
+            background: transparent;
+        }
         QTabWidget::pane {
             border: 1px solid #d9e0e7;
             background: #f4f6f8;
@@ -450,6 +456,19 @@ class MainWindow(QtWidgets.QMainWindow):
         #riderWeightLabel {
             color: #64727d;
             font-weight: 600;
+        }
+        #riderWeightInput {
+            min-height: 24px;
+            padding: 0 4px;
+            background: #ffffff;
+            border: 1px solid #d9e0e7;
+            border-radius: 4px;
+            color: #64727d;
+            font-weight: 600;
+        }
+        #riderWeightInput:disabled {
+            background: #f4f6f8;
+            color: #8a98a4;
         }
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
             min-height: 28px;
@@ -904,7 +923,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_route_controls_enabled(True)
         self._set_settings_controls_enabled(True)
         for panel in self.panels.values():
-            panel.set_inputs_locked(True)
+            panel.set_inputs_locked(False)
         self._refresh_all_panels()
         self._log("考试数据已重置")
 
@@ -958,7 +977,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_route_controls_enabled(True)
         self._set_settings_controls_enabled(True)
         for panel in self.panels.values():
-            panel.set_inputs_locked(True)
+            panel.set_inputs_locked(False)
         self._refresh_all_panels()
 
     def _rider_name_changed(self, slot: int, name: str) -> None:
@@ -968,6 +987,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _rider_weight_changed(self, slot: int, weight_kg: float) -> None:
         self.controller.set_rider_weight(slot, weight_kg)
         self._save_config()
+        self._populate_rider_settings_table()
         self._refresh_panel(slot)
 
     def _sync_rider_inputs(self) -> None:

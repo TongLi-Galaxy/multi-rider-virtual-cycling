@@ -5,6 +5,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from app.core.route import RouteProfile
 
 
+MIN_DISPLAY_ELEVATION_SPAN_M = 12.0
+BASE_HEIGHT_RATIO = 0.35
+ELEVATION_PADDING_RATIO = 0.12
+
+
 class RouteProfileWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -39,9 +44,8 @@ class RouteProfileWidget(QtWidgets.QWidget):
 
         total_distance = max(1.0, points[-1][0])
         elevations = [point[1] for point in points]
-        min_elevation = min(elevations)
-        max_elevation = max(elevations)
-        span = max(10.0, max_elevation - min_elevation)
+        min_elevation, max_elevation = _display_elevation_bounds(elevations)
+        span = max(1.0, max_elevation - min_elevation)
 
         chart = rect.adjusted(0, 2, 0, -8)
         baseline_y = chart.bottom()
@@ -125,3 +129,16 @@ class RouteProfileWidget(QtWidgets.QWidget):
             covered += segment.distance_m
             elevation += segment.distance_m * segment.grade_percent / 100.0
         return elevation
+
+
+def _display_elevation_bounds(elevations: list[float]) -> tuple[float, float]:
+    min_elevation = min(elevations)
+    max_elevation = max(elevations)
+    raw_span = max_elevation - min_elevation
+
+    if raw_span < MIN_DISPLAY_ELEVATION_SPAN_M:
+        display_min = min_elevation - MIN_DISPLAY_ELEVATION_SPAN_M * BASE_HEIGHT_RATIO
+        return display_min, display_min + MIN_DISPLAY_ELEVATION_SPAN_M
+
+    padding = raw_span * ELEVATION_PADDING_RATIO
+    return min_elevation - padding, max_elevation + padding
