@@ -216,7 +216,7 @@ class ExamController:
                 rider.last_periodic_second = second
                 self._record_sample(rider, current)
             if route_finished and self.exam_mode == EXAM_MODE_ROUTE:
-                self._finish_rider(rider, current, "completed")
+                self._finish_rider(rider, rider.finish_crossed_at or current, "completed")
 
         if self.exam_mode == EXAM_MODE_TIME and elapsed >= self.duration_seconds:
             self._finish(aborted=False, end_time=(self.start_time or current) + self.duration_seconds)

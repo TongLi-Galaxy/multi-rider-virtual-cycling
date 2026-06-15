@@ -156,6 +156,7 @@ class RiderPanel(QtWidgets.QFrame):
         elapsed: float,
         route_distance_m: float,
         now: float | None = None,
+        exam_mode: str = "time",
     ) -> None:
         self.set_rider_name(rider.rider_name)
         self.set_weight(rider.weight_kg)
@@ -169,7 +170,11 @@ class RiderPanel(QtWidgets.QFrame):
         self.power_label.setText("--" if current is None else str(current))
         self.hr_label.setText("-- bpm" if current_hr is None else f"{int(current_hr)} bpm")
         self.avg_power_label.setText(f"{rider.metrics.average_power:.1f} W")
-        self.avg_hr_label.setText(f"{rider.heart_rate_metrics.average_value:.0f} bpm")
+        self.avg_hr_label.setText(
+            "-- bpm"
+            if rider.heart_rate_metrics.valid_time <= 0
+            else f"{rider.heart_rate_metrics.average_value:.0f} bpm"
+        )
         self.grade_label.setText(f"{rider.current_grade_percent:.1f}%")
         self.elapsed_label.setText(format_seconds(elapsed))
         self.dropout_label.setText(f"{rider.dropout_time_at(now):.1f} s")
@@ -182,11 +187,14 @@ class RiderPanel(QtWidgets.QFrame):
         self._update_status_dot(rider.connection_status)
 
         if rider.final_status == "completed":
-            self.final_label.setText(
-                f"{rider.metrics.average_power:.1f} W / {max_power or 0} W max"
-            )
+            if exam_mode == "route":
+                self.final_label.setText(f"{format_seconds(rider.elapsed_at(now))} 完赛")
+            else:
+                self.final_label.setText(
+                    f"{rider.metrics.average_power:.1f} W / {max_power or 0} W max"
+                )
         elif rider.final_status == "aborted":
-            self.final_label.setText(f"{rider.metrics.average_power:.1f} W aborted")
+            self.final_label.setText("未完赛" if exam_mode == "route" else f"{rider.metrics.average_power:.1f} W aborted")
         else:
             self.final_label.setText("-")
 

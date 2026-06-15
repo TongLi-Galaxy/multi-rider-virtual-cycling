@@ -265,12 +265,18 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QHeaderView.ResizeMode.Stretch
         )
         self.route_table.verticalHeader().setVisible(False)
+        self.route_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.route_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
 
         button_row = QtWidgets.QHBoxLayout()
         self.add_segment_button = QtWidgets.QPushButton("新增路段")
         self.add_segment_button.clicked.connect(self._add_route_segment)
         self.remove_segment_button = QtWidgets.QPushButton("删除路段")
         self.remove_segment_button.clicked.connect(self._remove_route_segment)
+        self.move_segment_up_button = QtWidgets.QPushButton("上移")
+        self.move_segment_up_button.clicked.connect(lambda: self._move_route_segment(-1))
+        self.move_segment_down_button = QtWidgets.QPushButton("下移")
+        self.move_segment_down_button.clicked.connect(lambda: self._move_route_segment(1))
         self.apply_route_button = QtWidgets.QPushButton("应用赛道")
         self.apply_route_button.clicked.connect(self._apply_route_from_table)
         self.save_route_button = QtWidgets.QPushButton("保存赛道")
@@ -280,6 +286,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for button in [
             self.add_segment_button,
             self.remove_segment_button,
+            self.move_segment_up_button,
+            self.move_segment_down_button,
             self.apply_route_button,
             self.save_route_button,
         ]:
@@ -677,6 +685,36 @@ class MainWindow(QtWidgets.QMainWindow):
             self._insert_route_row(300.0, 0.0)
         self._update_route_total_label()
 
+    def _move_route_segment(self, delta: int) -> None:
+        if self.controller.running:
+            self._log("考试进行中不能修改赛道")
+            return
+        row = self.route_table.currentRow()
+        target = row + delta
+        if row < 0 or target < 0 or target >= self.route_table.rowCount():
+            return
+
+        rows: list[tuple[str, str]] = []
+        for index in range(self.route_table.rowCount()):
+            distance_item = self.route_table.item(index, 0)
+            grade_item = self.route_table.item(index, 1)
+            rows.append(
+                (
+                    distance_item.text() if distance_item else "300.0",
+                    grade_item.text() if grade_item else "0.0",
+                )
+            )
+        rows[row], rows[target] = rows[target], rows[row]
+
+        self.route_table.setRowCount(0)
+        for distance_text, grade_text in rows:
+            insert_row = self.route_table.rowCount()
+            self.route_table.insertRow(insert_row)
+            self.route_table.setItem(insert_row, 0, QtWidgets.QTableWidgetItem(distance_text))
+            self.route_table.setItem(insert_row, 1, QtWidgets.QTableWidgetItem(grade_text))
+        self.route_table.setCurrentCell(target, 0)
+        self._update_route_total_label()
+
     def _route_from_table(self) -> RouteProfile:
         segments: list[RouteSegment] = []
         for row in range(self.route_table.rowCount()):
@@ -740,6 +778,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.route_table,
             self.add_segment_button,
             self.remove_segment_button,
+            self.move_segment_up_button,
+            self.move_segment_down_button,
             self.apply_route_button,
             self.save_route_button,
         ]:
@@ -954,6 +994,7 @@ class MainWindow(QtWidgets.QMainWindow):
             elapsed,
             self.route_profile.total_distance_m,
             now,
+            self.settings.exam_mode,
         )
 
     def _refresh_all_panels(self) -> None:

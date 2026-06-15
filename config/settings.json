@@ -1,7 +1,0 @@
-{
-  "exam_mode": "time",
-  "duration_seconds": 60,
-  "bike_weight_kg": 9.0,
-  "mock_mode": true,
-  "push_grade": true
-}

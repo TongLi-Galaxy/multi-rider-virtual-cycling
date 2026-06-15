@@ -17,6 +17,7 @@ SUMMARY_FIELDS = [
     "exam_mode",
     "duration_seconds",
     "route_distance_m",
+    "finish_time_seconds",
     "average_power",
     "max_power",
     "average_heart_rate",
