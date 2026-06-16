@@ -9,6 +9,10 @@ SLOT_COLORS = {
     2: "#2f80ed",
     3: "#8e44ad",
     4: "#f39c12",
+    5: "#009688",
+    6: "#6d4c41",
+    7: "#546e7a",
+    8: "#c2185b",
 }
 
 
@@ -26,7 +30,9 @@ class RiderPanel(QtWidgets.QFrame):
         super().__init__(parent)
         self.slot = slot
         self.setObjectName("riderPanel")
-        self.setMinimumSize(330, 210)
+        self._display_density = "regular"
+        self._metrics_stacked = False
+        self.setMinimumSize(300, 210)
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -72,23 +78,23 @@ class RiderPanel(QtWidgets.QFrame):
         self.speed_caption.setObjectName("metricCaption")
         self.power_caption.setObjectName("metricCaption")
 
-        metric_grid = QtWidgets.QGridLayout()
-        metric_grid.setHorizontalSpacing(14)
-        metric_grid.setVerticalSpacing(0)
-        metric_grid.addWidget(self.speed_label, 0, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
-        power_wrap = QtWidgets.QWidget()
-        power_wrap_layout = QtWidgets.QHBoxLayout(power_wrap)
+        self.metric_grid = QtWidgets.QGridLayout()
+        self.metric_grid.setHorizontalSpacing(14)
+        self.metric_grid.setVerticalSpacing(0)
+        self.metric_grid.addWidget(self.speed_label, 0, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.power_wrap = QtWidgets.QWidget()
+        power_wrap_layout = QtWidgets.QHBoxLayout(self.power_wrap)
         power_wrap_layout.setContentsMargins(0, 0, 0, 0)
         power_wrap_layout.setSpacing(8)
         power_wrap_layout.addStretch(1)
         power_wrap_layout.addWidget(self.power_label)
         power_wrap_layout.addWidget(self.status_dot)
         power_wrap_layout.addStretch(1)
-        metric_grid.addWidget(power_wrap, 0, 1)
-        metric_grid.addWidget(self.speed_caption, 1, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
-        metric_grid.addWidget(self.power_caption, 1, 1, QtCore.Qt.AlignmentFlag.AlignCenter)
-        metric_grid.setColumnStretch(0, 1)
-        metric_grid.setColumnStretch(1, 1)
+        self.metric_grid.addWidget(self.power_wrap, 0, 1)
+        self.metric_grid.addWidget(self.speed_caption, 1, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.metric_grid.addWidget(self.power_caption, 1, 1, QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.metric_grid.setColumnStretch(0, 1)
+        self.metric_grid.setColumnStretch(1, 1)
 
         self.route_progress = QtWidgets.QProgressBar()
         self.route_progress.setRange(0, 1000)
@@ -106,7 +112,9 @@ class RiderPanel(QtWidgets.QFrame):
         self.distance_label = QtWidgets.QLabel("0 m")
         self.final_label = QtWidgets.QLabel("-")
 
-        detail_grid = QtWidgets.QGridLayout()
+        self.detail_widget = QtWidgets.QWidget()
+        detail_grid = QtWidgets.QGridLayout(self.detail_widget)
+        detail_grid.setContentsMargins(0, 0, 0, 0)
         detail_grid.setHorizontalSpacing(12)
         detail_grid.setVerticalSpacing(5)
         self._add_value(detail_grid, 0, 0, "心率", self.hr_label)
@@ -122,9 +130,9 @@ class RiderPanel(QtWidgets.QFrame):
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
         layout.addLayout(header)
-        layout.addLayout(metric_grid)
+        layout.addLayout(self.metric_grid)
         layout.addWidget(self.route_progress)
-        layout.addLayout(detail_grid)
+        layout.addWidget(self.detail_widget)
 
     def _add_value(
         self,
@@ -164,6 +172,61 @@ class RiderPanel(QtWidgets.QFrame):
 
     def set_inputs_locked(self, locked: bool) -> None:
         self.weight_input.setEnabled(not locked)
+
+    def set_display_density(self, density: str) -> None:
+        if density not in {"regular", "compact", "dense"}:
+            density = "regular"
+        if density == self._display_density:
+            return
+
+        self._display_density = density
+        compact = density in {"compact", "dense"}
+        dense = density == "dense"
+
+        self.detail_widget.setVisible(not compact)
+        self.route_progress.setVisible(not dense)
+        self.weight_input.setVisible(not dense)
+        self._set_metrics_stacked(dense)
+
+        if dense:
+            self.setMinimumSize(168, 176)
+        elif compact:
+            self.setMinimumSize(238, 148)
+        else:
+            self.setMinimumSize(300, 210)
+
+    def _set_metrics_stacked(self, stacked: bool) -> None:
+        if stacked == self._metrics_stacked:
+            return
+
+        for widget in [
+            self.speed_label,
+            self.speed_caption,
+            self.power_wrap,
+            self.power_caption,
+        ]:
+            self.metric_grid.removeWidget(widget)
+
+        if stacked:
+            self.metric_grid.setHorizontalSpacing(4)
+            self.metric_grid.setVerticalSpacing(0)
+            self.metric_grid.addWidget(self.speed_label, 0, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.metric_grid.addWidget(self.speed_caption, 1, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.metric_grid.addWidget(self.power_wrap, 2, 0)
+            self.metric_grid.addWidget(self.power_caption, 3, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.metric_grid.setColumnStretch(0, 1)
+            self.metric_grid.setColumnStretch(1, 0)
+        else:
+            self.metric_grid.setHorizontalSpacing(14)
+            self.metric_grid.setVerticalSpacing(0)
+            self.metric_grid.addWidget(self.speed_label, 0, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.metric_grid.addWidget(self.power_wrap, 0, 1)
+            self.metric_grid.addWidget(self.speed_caption, 1, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.metric_grid.addWidget(self.power_caption, 1, 1, QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.metric_grid.setColumnStretch(0, 1)
+            self.metric_grid.setColumnStretch(1, 1)
+
+        self._metrics_stacked = stacked
 
     def _weight_value_changed(self, value: float) -> None:
         if self._updating_weight:

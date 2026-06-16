@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.core.exam_controller import EXAM_MODE_ROUTE, EXAM_MODE_TIME, ExamController
+from app.core.exam_controller import EXAM_MODE_ROUTE, EXAM_MODE_TIME, MAX_RIDERS, ExamController
 from app.core.rider_state import DeviceBinding, STATUS_CONNECTED, STATUS_DROPPED
 from app.core.route import RouteProfile, RouteSegment
 from app.core.simulation import BASE_RIDER_CDA, draft_aero_multiplier, estimate_rider_cda, leader_wake_factor
@@ -62,6 +62,20 @@ class ExamBehaviourTests(unittest.TestCase):
         summary = controller.summary_rows()[0]
         self.assertEqual(summary["average_heart_rate"], "")
         self.assertEqual(summary["max_heart_rate"], "")
+
+    def test_controller_supports_eight_simultaneous_riders(self) -> None:
+        controller = ExamController(duration_seconds=60)
+        self.assertEqual(len(controller.riders), MAX_RIDERS)
+        for slot in range(1, MAX_RIDERS + 1):
+            rider = controller.rider(slot)
+            rider.apply_binding(DeviceBinding(slot=slot, device_name=f"Trainer {slot}", device_address=f"TEST-{slot}"))
+            rider.connection_status = STATUS_CONNECTED
+
+        ok, message = controller.prepare()
+        self.assertTrue(ok, message)
+        ok, message = controller.start()
+        self.assertTrue(ok, message)
+        self.assertEqual(controller.active_slots, set(range(1, MAX_RIDERS + 1)))
 
     def test_draft_multiplier_depends_on_gap_and_speed(self) -> None:
         self.assertEqual(draft_aero_multiplier(3.0, 10.0 / 3.6), 1.0)

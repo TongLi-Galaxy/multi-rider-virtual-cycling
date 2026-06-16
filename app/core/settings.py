@@ -6,6 +6,9 @@ from pathlib import Path
 
 from app.core.exam_controller import EXAM_MODE_TIME
 
+EXAM_LAYOUT_AUTO = "auto"
+EXAM_LAYOUT_MODES = {EXAM_LAYOUT_AUTO, "1", "2", "3", "4"}
+
 
 @dataclass(slots=True)
 class AppSettings:
@@ -15,9 +18,13 @@ class AppSettings:
     mock_mode: bool = False
     push_grade: bool = True
     drafting_enabled: bool = False
+    exam_layout_mode: str = EXAM_LAYOUT_AUTO
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
+        layout_mode = str(data.get("exam_layout_mode", EXAM_LAYOUT_AUTO))
+        if layout_mode not in EXAM_LAYOUT_MODES:
+            layout_mode = EXAM_LAYOUT_AUTO
         return cls(
             exam_mode=str(data.get("exam_mode", EXAM_MODE_TIME)),
             duration_seconds=max(1, int(data.get("duration_seconds", 60))),
@@ -25,6 +32,7 @@ class AppSettings:
             mock_mode=bool(data.get("mock_mode", False)),
             push_grade=bool(data.get("push_grade", True)),
             drafting_enabled=bool(data.get("drafting_enabled", False)),
+            exam_layout_mode=layout_mode,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -35,6 +43,7 @@ class AppSettings:
             "mock_mode": self.mock_mode,
             "push_grade": self.push_grade,
             "drafting_enabled": self.drafting_enabled,
+            "exam_layout_mode": self.exam_layout_mode,
         }
 
 

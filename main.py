@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.ble.device_client import MockTrainerDeviceClient, TrainerDeviceClient
 from app.ble.scanner import scan_ble_devices
+from app.core.exam_controller import MAX_RIDERS, MIN_RIDERS
 from app.utils.logger import get_app_logger
 
 
@@ -83,12 +84,12 @@ async def run_multi(addresses: list[str], duration: int, mock: bool = False) -> 
     if mock:
         clients = [
             MockTrainerDeviceClient(slot, on_power, on_status, on_log)
-            for slot in range(1, 5)
+            for slot in range(MIN_RIDERS, MAX_RIDERS + 1)
         ]
     else:
         clients = [
             TrainerDeviceClient(index, address, address, on_power, on_status, on_log)
-            for index, address in enumerate(addresses[:4], start=1)
+            for index, address in enumerate(addresses[:MAX_RIDERS], start=MIN_RIDERS)
         ]
 
     tasks = [asyncio.create_task(client.run()) for client in clients]
@@ -131,10 +132,10 @@ def build_parser() -> argparse.ArgumentParser:
     read_parser.add_argument("--duration", type=int, default=60, help="读取秒数")
     read_parser.add_argument("--mock", action="store_true", help="使用 mock 功率源")
 
-    multi_parser = subparsers.add_parser("multi", help="并发连接最多 4 台设备")
+    multi_parser = subparsers.add_parser("multi", help=f"并发连接最多 {MAX_RIDERS} 台设备")
     multi_parser.add_argument("--addresses", nargs="*", default=[], help="BLE 地址列表")
     multi_parser.add_argument("--duration", type=int, default=60, help="读取秒数")
-    multi_parser.add_argument("--mock", action="store_true", help="使用 4 台 mock 功率源")
+    multi_parser.add_argument("--mock", action="store_true", help=f"使用 {MAX_RIDERS} 台 mock 功率源")
 
     return parser
 

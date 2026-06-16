@@ -11,12 +11,14 @@ from app.core.exam_controller import (
     EXAM_MODE_ROUTE,
     EXAM_MODE_TIME,
     ExamController,
+    MAX_RIDERS,
+    MIN_RIDERS,
     default_config_path,
 )
 from app.core.exporter import export_exam_csv
 from app.core.rider_state import STATUS_CONNECTING, STATUS_DISCONNECTED
 from app.core.route import RouteProfile, RouteSegment, load_route, save_route
-from app.core.settings import AppSettings, load_settings, save_settings
+from app.core.settings import AppSettings, EXAM_LAYOUT_AUTO, load_settings, save_settings
 from app.gui.rider_panel import RiderPanel
 from app.gui.route_profile_widget import RouteProfileWidget
 from app.gui.scan_dialog import ScanDialog
@@ -70,7 +72,7 @@ class BleRuntime(QtCore.QThread):
 
         for binding in self.bindings:
             slot = int(binding.get("slot", 0))
-            if slot < 1 or slot > 4:
+            if slot < MIN_RIDERS or slot > MAX_RIDERS:
                 continue
 
             if self.mock:
@@ -150,6 +152,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config_path = default_config_path()
         self.ble_runtime: BleRuntime | None = None
         self.panels: dict[int, RiderPanel] = {}
+        self._exam_layout_state: tuple[tuple[int, ...], int, str] | None = None
         self._settings_table_blocked = False
         self._applying_settings_widgets = False
         self._last_grade_push_at = 0.0
@@ -219,36 +222,57 @@ class MainWindow(QtWidgets.QMainWindow):
         page = QtWidgets.QWidget()
         page_layout = QtWidgets.QVBoxLayout(page)
         page_layout.setContentsMargins(0, 0, 0, 0)
-        page_layout.setSpacing(8)
+        page_layout.setSpacing(6)
+
+        display_bar = QtWidgets.QFrame()
+        display_bar.setObjectName("examDisplayBar")
+        display_layout = QtWidgets.QHBoxLayout(display_bar)
+        display_layout.setContentsMargins(8, 6, 8, 6)
+        display_layout.setSpacing(8)
+
+        self.exam_layout_combo = QtWidgets.QComboBox()
+        for label, mode in [
+            ("自动", EXAM_LAYOUT_AUTO),
+            ("1列", "1"),
+            ("2列", "2"),
+            ("3列", "3"),
+            ("4列", "4"),
+        ]:
+            self.exam_layout_combo.addItem(label, mode)
+        layout_index = self.exam_layout_combo.findData(self.settings.exam_layout_mode)
+        self.exam_layout_combo.setCurrentIndex(max(0, layout_index))
+        self.exam_layout_combo.currentIndexChanged.connect(self._exam_layout_mode_changed)
+
+        display_layout.addWidget(QtWidgets.QLabel("显示"))
+        display_layout.addWidget(self.exam_layout_combo)
+        display_layout.addStretch(1)
 
         self.exam_route_profile_widget = RouteProfileWidget()
         self.exam_route_profile_widget.setMinimumHeight(150)
         self.exam_route_profile_widget.setMaximumHeight(180)
         self.exam_route_profile_widget.set_route(self.route_profile)
 
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.exam_scroll = QtWidgets.QScrollArea()
+        self.exam_scroll.setWidgetResizable(True)
+        self.exam_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
 
-        container = QtWidgets.QWidget()
-        panels_grid = QtWidgets.QGridLayout(container)
-        panels_grid.setContentsMargins(0, 0, 0, 0)
-        panels_grid.setSpacing(8)
-        for slot in range(1, 5):
+        self.panels_container = QtWidgets.QWidget()
+        self.panels_grid = QtWidgets.QGridLayout(self.panels_container)
+        self.panels_grid.setContentsMargins(0, 0, 0, 0)
+        self.panels_grid.setSpacing(8)
+        for slot in range(1, MAX_RIDERS + 1):
             panel = RiderPanel(slot)
             panel.rider_name_changed.connect(self._rider_name_changed)
             panel.rider_weight_changed.connect(self._rider_weight_changed)
             panel.set_inputs_locked(False)
             self.panels[slot] = panel
-            panels_grid.addWidget(panel, (slot - 1) // 2, (slot - 1) % 2)
-        panels_grid.setRowStretch(0, 1)
-        panels_grid.setRowStretch(1, 1)
-        panels_grid.setColumnStretch(0, 1)
-        panels_grid.setColumnStretch(1, 1)
+            panel.hide()
 
-        scroll.setWidget(container)
+        self.exam_scroll.setWidget(self.panels_container)
+        page_layout.addWidget(display_bar)
         page_layout.addWidget(self.exam_route_profile_widget)
-        page_layout.addWidget(scroll)
+        page_layout.addWidget(self.exam_scroll, 1)
+        self._apply_exam_layout(force=True)
         return page
 
     def _build_route_page(self) -> QtWidgets.QWidget:
@@ -378,7 +402,7 @@ class MainWindow(QtWidgets.QMainWindow):
         device_buttons.addWidget(self.connect_button)
         device_buttons.addStretch(1)
 
-        self.rider_settings_table = QtWidgets.QTableWidget(4, 5)
+        self.rider_settings_table = QtWidgets.QTableWidget(len(self.controller.riders), 5)
         self.rider_settings_table.setHorizontalHeaderLabels(
             ["分屏", "选手名", "体重 kg", "设备", "地址"]
         )
@@ -445,7 +469,7 @@ class MainWindow(QtWidgets.QMainWindow):
             border-radius: 6px;
             gridline-color: #e8eef2;
         }
-        #controlBar, #riderPanel {
+        #controlBar, #examDisplayBar, #riderPanel {
             background: #ffffff;
             border: 1px solid #d9e0e7;
             border-radius: 6px;
@@ -562,6 +586,11 @@ class MainWindow(QtWidgets.QMainWindow):
         value = int(self.duration_combo.currentData())
         return int(self.custom_seconds.value()) if value == -1 else value
 
+    def _current_exam_layout_mode(self) -> str:
+        if hasattr(self, "exam_layout_combo"):
+            return str(self.exam_layout_combo.currentData() or EXAM_LAYOUT_AUTO)
+        return self.settings.exam_layout_mode
+
     def _apply_settings_to_widgets(self) -> None:
         self._applying_settings_widgets = True
         mode_index = self.exam_mode_combo.findData(self.settings.exam_mode)
@@ -579,6 +608,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mock_checkbox.setChecked(self.settings.mock_mode)
         self.push_grade_checkbox.setChecked(self.settings.push_grade)
         self.drafting_checkbox.setChecked(self.settings.drafting_enabled)
+        if hasattr(self, "exam_layout_combo"):
+            layout_index = self.exam_layout_combo.findData(self.settings.exam_layout_mode)
+            self.exam_layout_combo.setCurrentIndex(max(0, layout_index))
         duration_enabled = self.settings.exam_mode == EXAM_MODE_TIME
         self.duration_combo.setEnabled(duration_enabled)
         self.custom_seconds.setEnabled(duration_enabled)
@@ -598,6 +630,7 @@ class MainWindow(QtWidgets.QMainWindow):
             mock_mode=self.mock_checkbox.isChecked(),
             push_grade=self.push_grade_checkbox.isChecked(),
             drafting_enabled=self.drafting_checkbox.isChecked(),
+            exam_layout_mode=self._current_exam_layout_mode(),
         )
         self.controller.set_exam_mode(self.settings.exam_mode)
         self.controller.set_duration(self.settings.duration_seconds)
@@ -613,6 +646,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_mode_status_label()
         self._refresh_all_panels()
 
+    def _exam_layout_mode_changed(self) -> None:
+        if self._applying_settings_widgets:
+            return
+        self.settings.exam_layout_mode = self._current_exam_layout_mode()
+        save_settings(self.settings)
+        self._apply_exam_layout(force=True)
+
     def _update_mode_status_label(self) -> None:
         if not hasattr(self, "mode_status_label"):
             return
@@ -627,6 +667,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not hasattr(self, "rider_settings_table"):
             return
         self._settings_table_blocked = True
+        self.rider_settings_table.setRowCount(len(self.controller.riders))
         for row, rider in enumerate(self.controller.riders):
             values = [
                 f"{rider.slot}号",
@@ -658,6 +699,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._save_config()
         self._refresh_panel(slot)
+        self._apply_exam_layout(force=True)
 
     def _load_config(self) -> None:
         try:
@@ -854,6 +896,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_config()
         self._populate_rider_settings_table()
         self._refresh_panel(slot)
+        self._apply_exam_layout(force=True)
         self._log(f"{slot}号分屏已绑定 {device.get('name') or device.get('address')}")
 
     def _connect_devices(self) -> None:
@@ -865,8 +908,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ble_runtime.wait(3000)
 
         if self.mock_checkbox.isChecked():
-            for slot in range(1, 5):
-                rider = self.controller.rider(slot)
+            for rider in self.controller.riders:
+                slot = rider.slot
                 self.controller.bind_device(
                     slot,
                     {
@@ -998,12 +1041,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _rider_name_changed(self, slot: int, name: str) -> None:
         self.controller.set_rider_name(slot, name)
         self._save_config()
+        self._apply_exam_layout(force=True)
 
     def _rider_weight_changed(self, slot: int, weight_kg: float) -> None:
         self.controller.set_rider_weight(slot, weight_kg)
         self._save_config()
         self._populate_rider_settings_table()
         self._refresh_panel(slot)
+        self._apply_exam_layout(force=True)
 
     def _sync_rider_inputs(self) -> None:
         if hasattr(self, "rider_settings_table"):
@@ -1033,13 +1078,102 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _refresh_all_panels(self) -> None:
-        for slot in range(1, 5):
-            self._refresh_panel(slot)
+        for rider in self.controller.riders:
+            self._refresh_panel(rider.slot)
         if hasattr(self, "route_profile_widget"):
             distances = {rider.slot: rider.simulated_distance_m for rider in self.controller.riders}
             self.route_profile_widget.set_rider_distances(distances)
             self.exam_route_profile_widget.set_rider_distances(distances)
+            self._apply_exam_layout()
             self._update_exam_route_visibility()
+
+    def _exam_visible_slots(self) -> list[int]:
+        configured = [
+            rider.slot
+            for rider in self.controller.riders
+            if (
+                rider.slot in self.controller.active_slots
+                or bool(rider.device_address)
+                or bool(rider.device_name)
+                or bool(rider.rider_name)
+            )
+        ]
+        if configured:
+            return configured
+        return [rider.slot for rider in self.controller.riders]
+
+    def _exam_viewport_size(self) -> QtCore.QSize:
+        if hasattr(self, "exam_scroll"):
+            size = self.exam_scroll.viewport().size()
+            if size.width() > 0 and size.height() > 0:
+                return size
+        return self.size()
+
+    def _desired_exam_columns(self, visible_count: int) -> int:
+        mode = self._current_exam_layout_mode()
+        if mode.isdigit():
+            return max(1, min(int(mode), visible_count))
+
+        width = self._exam_viewport_size().width()
+        if visible_count <= 1:
+            return 1
+        if width >= 1080 and visible_count >= 7:
+            return 4
+        if width >= 860 and visible_count >= 5:
+            return 3
+        if width >= 560:
+            return 2
+        return 1
+
+    def _exam_density_for_layout(self, columns: int, visible_count: int) -> str:
+        viewport = self._exam_viewport_size()
+        spacing = self.panels_grid.spacing() if hasattr(self, "panels_grid") else 8
+        cell_width = (viewport.width() - spacing * max(0, columns - 1)) / max(1, columns)
+        rows = (visible_count + columns - 1) // max(1, columns)
+
+        if columns >= 4 or cell_width < 220:
+            return "dense"
+        if columns >= 3 or cell_width < 300 or rows * 188 > viewport.height():
+            return "compact"
+        return "regular"
+
+    def _apply_exam_layout(self, force: bool = False) -> None:
+        if not hasattr(self, "panels_grid"):
+            return
+
+        visible_slots = tuple(self._exam_visible_slots())
+        visible_count = max(1, len(visible_slots))
+        columns = self._desired_exam_columns(visible_count)
+        density = self._exam_density_for_layout(columns, visible_count)
+        state = (visible_slots, columns, density)
+        if not force and state == self._exam_layout_state:
+            return
+
+        while self.panels_grid.count():
+            self.panels_grid.takeAt(0)
+
+        for index in range(MAX_RIDERS):
+            self.panels_grid.setColumnStretch(index, 0)
+            self.panels_grid.setRowStretch(index, 0)
+
+        for panel in self.panels.values():
+            panel.hide()
+
+        for index, slot in enumerate(visible_slots):
+            panel = self.panels[slot]
+            panel.set_display_density(density)
+            row = index // columns
+            column = index % columns
+            self.panels_grid.addWidget(panel, row, column)
+            panel.show()
+
+        rows = (len(visible_slots) + columns - 1) // columns
+        for column in range(columns):
+            self.panels_grid.setColumnStretch(column, 1)
+        for row in range(rows):
+            self.panels_grid.setRowStretch(row, 1)
+
+        self._exam_layout_state = state
 
     def _update_exam_route_visibility(self) -> None:
         if not hasattr(self, "exam_route_profile_widget"):
@@ -1048,6 +1182,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
+        self._apply_exam_layout()
         self._update_exam_route_visibility()
 
     def _log(self, message: str) -> None:

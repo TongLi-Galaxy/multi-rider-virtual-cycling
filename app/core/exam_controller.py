@@ -25,15 +25,18 @@ from app.core.simulation import (
 
 EXAM_MODE_TIME = "time"
 EXAM_MODE_ROUTE = "route"
+MIN_RIDERS = 1
+MAX_RIDERS = 8
 
 
 class ExamController:
-    def __init__(self, duration_seconds: int = 60) -> None:
+    def __init__(self, duration_seconds: int = 60, rider_count: int = MAX_RIDERS) -> None:
         self.duration_seconds = duration_seconds
         self.exam_mode = EXAM_MODE_TIME
         self.drafting_enabled = False
         self.bike_weight_kg = 10.0
-        self.riders = [RiderState(slot=index) for index in range(1, 5)]
+        self.rider_count = min(MAX_RIDERS, max(MIN_RIDERS, int(rider_count)))
+        self.riders = [RiderState(slot=index) for index in range(1, self.rider_count + 1)]
         self.route_profile = RouteProfile()
         self.active_slots: set[int] = set()
         self.exam_id = ""
@@ -45,7 +48,14 @@ class ExamController:
         self.samples: list[SampleRecord] = []
 
     def load_bindings(self, slots: list[dict]) -> None:
-        by_slot = {int(item.get("slot", 0)): item for item in slots}
+        by_slot: dict[int, dict] = {}
+        for item in slots:
+            try:
+                slot = int(item.get("slot", 0))
+            except (TypeError, ValueError):
+                continue
+            if MIN_RIDERS <= slot <= self.rider_count:
+                by_slot[slot] = item
         for rider in self.riders:
             data = by_slot.get(rider.slot)
             if data:
@@ -107,6 +117,8 @@ class ExamController:
         rider.connection_message = "设备已绑定"
 
     def rider(self, slot: int) -> RiderState:
+        if slot < MIN_RIDERS or slot > self.rider_count:
+            raise ValueError(f"slot must be between {MIN_RIDERS} and {self.rider_count}")
         return self.riders[slot - 1]
 
     def active_riders(self) -> list[RiderState]:

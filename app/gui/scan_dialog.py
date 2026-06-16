@@ -4,6 +4,7 @@ import asyncio
 
 from PySide6 import QtCore, QtWidgets
 
+from app.core.exam_controller import MAX_RIDERS, MIN_RIDERS
 from app.ble.scanner import scan_ble_devices
 
 
@@ -42,7 +43,7 @@ class ScanDialog(QtWidgets.QDialog):
         self.scan_button.clicked.connect(self.start_scan)
 
         self.slot_combo = QtWidgets.QComboBox()
-        for slot in range(1, 5):
+        for slot in range(MIN_RIDERS, MAX_RIDERS + 1):
             self.slot_combo.addItem(f"{slot}号分屏", slot)
 
         self.bind_button = QtWidgets.QPushButton("绑定到分屏")
@@ -131,4 +132,3 @@ class ScanDialog(QtWidgets.QDialog):
         slot = int(self.slot_combo.currentData())
         self.device_selected.emit(slot, device)
         self.status_label.setText(f"已绑定到 {slot}号分屏")
-

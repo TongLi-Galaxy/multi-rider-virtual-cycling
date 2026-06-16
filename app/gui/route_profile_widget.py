@@ -7,7 +7,7 @@ from app.core.route import RouteProfile
 
 MIN_DISPLAY_ELEVATION_SPAN_M = 12.0
 BASE_HEIGHT_RATIO = 0.35
-ELEVATION_PADDING_RATIO = 0.12
+TOP_HEADROOM_RATIO = 0.12
 
 
 class RouteProfileWidget(QtWidgets.QWidget):
@@ -84,7 +84,16 @@ class RouteProfileWidget(QtWidgets.QWidget):
             segment_x += segment.distance_m / total_distance * chart.width()
             painter.drawLine(int(segment_x), chart.top(), int(segment_x), baseline_y)
 
-        colors = ["#dc3b35", "#2f80ed", "#8e44ad", "#f39c12"]
+        colors = [
+            "#dc3b35",
+            "#2f80ed",
+            "#8e44ad",
+            "#f39c12",
+            "#009688",
+            "#6d4c41",
+            "#546e7a",
+            "#c2185b",
+        ]
         for slot, distance in sorted(self._rider_distances.items()):
             if total_distance <= 0:
                 continue
@@ -135,10 +144,11 @@ def _display_elevation_bounds(elevations: list[float]) -> tuple[float, float]:
     min_elevation = min(elevations)
     max_elevation = max(elevations)
     raw_span = max_elevation - min_elevation
+    route_height_ratio = max(0.05, 1.0 - BASE_HEIGHT_RATIO - TOP_HEADROOM_RATIO)
 
-    if raw_span < MIN_DISPLAY_ELEVATION_SPAN_M:
-        display_min = min_elevation - MIN_DISPLAY_ELEVATION_SPAN_M * BASE_HEIGHT_RATIO
-        return display_min, display_min + MIN_DISPLAY_ELEVATION_SPAN_M
-
-    padding = raw_span * ELEVATION_PADDING_RATIO
-    return min_elevation - padding, max_elevation + padding
+    display_span = max(
+        MIN_DISPLAY_ELEVATION_SPAN_M,
+        raw_span / route_height_ratio if raw_span > 0 else MIN_DISPLAY_ELEVATION_SPAN_M,
+    )
+    display_min = min_elevation - display_span * BASE_HEIGHT_RATIO
+    return display_min, display_min + display_span
