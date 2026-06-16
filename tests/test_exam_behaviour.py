@@ -5,7 +5,7 @@ import unittest
 from app.core.exam_controller import EXAM_MODE_ROUTE, EXAM_MODE_TIME, ExamController
 from app.core.rider_state import DeviceBinding, STATUS_CONNECTED, STATUS_DROPPED
 from app.core.route import RouteProfile, RouteSegment
-from app.core.simulation import draft_aero_multiplier
+from app.core.simulation import BASE_RIDER_CDA, draft_aero_multiplier, estimate_rider_cda, leader_wake_factor
 
 
 class ExamBehaviourTests(unittest.TestCase):
@@ -71,6 +71,29 @@ class ExamBehaviourTests(unittest.TestCase):
         self.assertLess(
             draft_aero_multiplier(2.0, 12.0, riders_ahead=3),
             draft_aero_multiplier(2.0, 12.0, riders_ahead=1),
+        )
+
+    def test_rider_cda_uses_weight_as_conservative_proxy(self) -> None:
+        light = estimate_rider_cda(55.0)
+        reference = estimate_rider_cda(70.0)
+        heavy = estimate_rider_cda(95.0)
+        very_heavy = estimate_rider_cda(180.0)
+
+        self.assertAlmostEqual(reference, BASE_RIDER_CDA)
+        self.assertLess(light, reference)
+        self.assertGreater(heavy, reference)
+        self.assertGreaterEqual(light, BASE_RIDER_CDA * 0.90)
+        self.assertLessEqual(very_heavy, BASE_RIDER_CDA * 1.10)
+
+    def test_leader_cda_changes_draft_wake_strength_slightly(self) -> None:
+        light_leader = leader_wake_factor(estimate_rider_cda(50.0))
+        heavy_leader = leader_wake_factor(estimate_rider_cda(100.0))
+
+        self.assertLess(light_leader, 1.0)
+        self.assertGreater(heavy_leader, 1.0)
+        self.assertLess(
+            draft_aero_multiplier(2.0, 12.0, leader_cda_factor=heavy_leader),
+            draft_aero_multiplier(2.0, 12.0, leader_cda_factor=light_leader),
         )
 
     def test_route_drafting_tracks_nearest_leader(self) -> None:

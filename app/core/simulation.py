@@ -3,6 +3,13 @@ from __future__ import annotations
 import math
 
 
+BASE_RIDER_CDA = 0.32
+REFERENCE_RIDER_WEIGHT_KG = 70.0
+CDA_WEIGHT_EXPONENT = 0.23
+MIN_RIDER_CDA_FACTOR = 0.90
+MAX_RIDER_CDA_FACTOR = 1.10
+MIN_LEADER_WAKE_FACTOR = 0.92
+MAX_LEADER_WAKE_FACTOR = 1.08
 MAX_SINGLE_RIDER_DRAFT_REDUCTION = 0.25
 MAX_TOTAL_DRAFT_REDUCTION = 0.35
 PACK_DRAFT_BONUS_PER_RIDER = 0.05
@@ -18,7 +25,7 @@ def estimate_speed_kph(
     rider_weight_kg: float,
     grade_percent: float,
     bike_weight_kg: float = 10.0,
-    cda: float = 0.32,
+    cda: float | None = None,
     crr: float = 0.004,
     air_density: float = 1.225,
     drivetrain_efficiency: float = 0.97,
@@ -32,6 +39,7 @@ def estimate_speed_kph(
     """
     power = max(0.0, float(power_watts or 0.0)) * drivetrain_efficiency
     rider_weight = min(200.0, max(30.0, float(rider_weight_kg)))
+    effective_cda = estimate_rider_cda(rider_weight) if cda is None else _clamp_cda(cda)
     grade = min(25.0, max(-20.0, float(grade_percent))) / 100.0
 
     total_mass = rider_weight + bike_weight_kg
@@ -43,7 +51,14 @@ def estimate_speed_kph(
         return 0.0
 
     def required_power(v_mps: float) -> float:
-        aero_force = 0.5 * air_density * cda * _clamp_aero_multiplier(aero_drag_multiplier) * v_mps * v_mps
+        aero_force = (
+            0.5
+            * air_density
+            * effective_cda
+            * _clamp_aero_multiplier(aero_drag_multiplier)
+            * v_mps
+            * v_mps
+        )
         return (gravity_force + rolling_force + aero_force) * v_mps
 
     low = 0.0
@@ -65,7 +80,7 @@ def advance_speed_mps(
     bike_weight_kg: float,
     grade_percent: float,
     dt: float,
-    cda: float = 0.32,
+    cda: float | None = None,
     crr: float = 0.004,
     air_density: float = 1.225,
     drivetrain_efficiency: float = 0.97,
@@ -77,6 +92,7 @@ def advance_speed_mps(
 
     power = max(0.0, float(power_watts or 0.0)) * drivetrain_efficiency
     rider_weight = min(200.0, max(30.0, float(rider_weight_kg)))
+    effective_cda = estimate_rider_cda(rider_weight) if cda is None else _clamp_cda(cda)
     bike_weight = min(30.0, max(5.0, float(bike_weight_kg)))
     total_mass = rider_weight + bike_weight
     grade = min(25.0, max(-20.0, float(grade_percent))) / 100.0
@@ -90,7 +106,14 @@ def advance_speed_mps(
 
     gravity_force = total_mass * 9.80665 * math.sin(angle)
     rolling_force = crr * total_mass * 9.80665 * math.cos(angle)
-    aero_force = 0.5 * air_density * cda * _clamp_aero_multiplier(aero_drag_multiplier) * speed * speed
+    aero_force = (
+        0.5
+        * air_density
+        * effective_cda
+        * _clamp_aero_multiplier(aero_drag_multiplier)
+        * speed
+        * speed
+    )
     net_force = drive_force - gravity_force - rolling_force - aero_force
 
     acceleration = max(-6.0, min(4.0, net_force / total_mass))
@@ -107,6 +130,7 @@ def draft_aero_multiplier(
     gap_m: float | None,
     speed_mps: float,
     riders_ahead: int = 1,
+    leader_cda_factor: float = 1.0,
     max_single_rider_reduction: float = MAX_SINGLE_RIDER_DRAFT_REDUCTION,
     max_total_reduction: float = MAX_TOTAL_DRAFT_REDUCTION,
 ) -> float:
@@ -127,10 +151,12 @@ def draft_aero_multiplier(
         (max(0.0, float(speed_mps)) - DRAFT_START_SPEED_MPS)
         / (DRAFT_FULL_SPEED_MPS - DRAFT_START_SPEED_MPS)
     )
+    wake_factor = min(MAX_LEADER_WAKE_FACTOR, max(MIN_LEADER_WAKE_FACTOR, float(leader_cda_factor)))
     base_reduction = (
         max(0.0, min(0.45, max_single_rider_reduction))
         * distance_effect
         * speed_effect
+        * wake_factor
     )
     pack_bonus = max(0, int(riders_ahead) - 1) * PACK_DRAFT_BONUS_PER_RIDER * speed_effect
     reduction = min(max_total_reduction, base_reduction + pack_bonus)
@@ -140,13 +166,34 @@ def draft_aero_multiplier(
 def estimate_draft_savings_watts(
     speed_mps: float,
     aero_drag_multiplier: float,
-    cda: float = 0.32,
+    cda: float = BASE_RIDER_CDA,
     air_density: float = 1.225,
 ) -> float:
     speed = max(0.0, float(speed_mps))
     multiplier = _clamp_aero_multiplier(aero_drag_multiplier)
-    solo_aero_power = 0.5 * air_density * cda * speed * speed * speed
+    solo_aero_power = 0.5 * air_density * _clamp_cda(cda) * speed * speed * speed
     return max(0.0, solo_aero_power * (1.0 - multiplier))
+
+
+def estimate_rider_cda(
+    rider_weight_kg: float,
+    base_cda: float = BASE_RIDER_CDA,
+) -> float:
+    """Estimate rider CdA from weight as a conservative body-size proxy."""
+    weight = min(200.0, max(30.0, float(rider_weight_kg)))
+    factor = (weight / REFERENCE_RIDER_WEIGHT_KG) ** CDA_WEIGHT_EXPONENT
+    factor = min(MAX_RIDER_CDA_FACTOR, max(MIN_RIDER_CDA_FACTOR, factor))
+    return _clamp_cda(base_cda * factor)
+
+
+def leader_wake_factor(
+    leader_cda: float,
+    base_cda: float = BASE_RIDER_CDA,
+) -> float:
+    """Convert leader CdA into a small wake-strength factor for drafting."""
+    base = _clamp_cda(base_cda)
+    factor = _clamp_cda(leader_cda) / base
+    return min(MAX_LEADER_WAKE_FACTOR, max(MIN_LEADER_WAKE_FACTOR, factor))
 
 
 def _smoothstep(value: float) -> float:
@@ -156,6 +203,10 @@ def _smoothstep(value: float) -> float:
 
 def _clamp_aero_multiplier(value: float) -> float:
     return min(1.0, max(0.55, float(value)))
+
+
+def _clamp_cda(value: float) -> float:
+    return min(0.70, max(0.15, float(value)))
 
 
 def estimate_heart_rate(

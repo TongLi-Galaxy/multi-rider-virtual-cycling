@@ -19,6 +19,8 @@ from app.core.simulation import (
     DRAFT_EFFECTIVE_GAP_M,
     draft_aero_multiplier,
     estimate_draft_savings_watts,
+    estimate_rider_cda,
+    leader_wake_factor,
 )
 
 EXAM_MODE_TIME = "time"
@@ -358,10 +360,25 @@ class ExamController:
         if nearest_gap is None:
             return 1.0, None, None, 0, 0.0
 
-        multiplier = draft_aero_multiplier(nearest_gap, rider_speed, riders_ahead=riders_ahead)
+        leader_cda_factor = 1.0
+        if leader_slot is not None:
+            leader_snapshot = snapshots.get(leader_slot)
+            if leader_snapshot:
+                leader_cda_factor = leader_wake_factor(float(leader_snapshot["rider_cda"]))
+
+        multiplier = draft_aero_multiplier(
+            nearest_gap,
+            rider_speed,
+            riders_ahead=riders_ahead,
+            leader_cda_factor=leader_cda_factor,
+        )
         if multiplier >= 0.999:
             return 1.0, None, None, 0, 0.0
-        savings_watts = estimate_draft_savings_watts(rider_speed, multiplier)
+        savings_watts = estimate_draft_savings_watts(
+            rider_speed,
+            multiplier,
+            cda=float(rider_snapshot["rider_cda"]),
+        )
         return multiplier, nearest_gap, leader_slot, riders_ahead, savings_watts
 
     def _draft_snapshots(self) -> dict[int, dict[str, object]]:
@@ -369,6 +386,7 @@ class ExamController:
             rider.slot: {
                 "distance_m": rider.simulated_distance_m,
                 "speed_mps": rider.simulated_speed_mps,
+                "rider_cda": estimate_rider_cda(rider.weight_kg),
                 "connection_status": rider.connection_status,
                 "exam_running": rider.exam_running,
             }
