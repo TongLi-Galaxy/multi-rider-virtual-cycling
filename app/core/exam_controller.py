@@ -186,17 +186,9 @@ class ExamController:
         rider = self.rider(slot)
         if rider.final_status == "completed":
             return
-        self._advance_rider_simulation(
-            rider,
-            now,
-        )
         accepted = rider.add_power(now, power)
-        self._advance_rider_simulation(
-            rider,
-            now,
-        )
         if self.running and accepted:
-            self._record_sample(rider, now)
+            rider.last_power_timestamp = now
 
     def tick(self, now: float | None = None) -> bool:
         if not self.running:
@@ -204,12 +196,27 @@ class ExamController:
 
         current = now or time.time()
         elapsed = current - (self.start_time or current)
-        for rider in self.riders:
+        active_running = [
+            rider
+            for rider in self.riders
+            if rider.slot in self.active_slots and rider.exam_running
+        ]
+        for rider in active_running:
+            rider.check_dropout(current)
+
+        snapshots = self._draft_snapshots()
+        draft_effects = {
+            rider.slot: self._draft_effect_for(rider, snapshots)
+            for rider in active_running
+        }
+
+        for rider in active_running:
             if rider.slot not in self.active_slots or not rider.exam_running:
                 continue
             route_finished = self._advance_rider_simulation(
                 rider,
                 current,
+                draft_effects.get(rider.slot),
             )
             rider.check_dropout(current)
             second = int(elapsed)
@@ -291,8 +298,15 @@ class ExamController:
         total = self.route_profile.total_distance_m
         return total if total > 0 else None
 
-    def _advance_rider_simulation(self, rider: RiderState, now: float) -> bool:
-        multiplier, gap_m, leader_slot, riders_ahead, savings_watts = self._draft_effect_for(rider)
+    def _advance_rider_simulation(
+        self,
+        rider: RiderState,
+        now: float,
+        draft_effect: tuple[float, float | None, int | None, int, float] | None = None,
+    ) -> bool:
+        if draft_effect is None:
+            draft_effect = self._draft_effect_for(rider, self._draft_snapshots())
+        multiplier, gap_m, leader_slot, riders_ahead, savings_watts = draft_effect
         return rider.advance_simulation(
             now,
             self.route_profile,
@@ -309,39 +323,58 @@ class ExamController:
     def _draft_effect_for(
         self,
         rider: RiderState,
+        snapshots: dict[int, dict[str, object]],
     ) -> tuple[float, float | None, int | None, int, float]:
         if not self.drafting_enabled or self.exam_mode != EXAM_MODE_ROUTE:
             return 1.0, None, None, 0, 0.0
         if not rider.exam_running or rider.connection_status == STATUS_DROPPED:
             return 1.0, None, None, 0, 0.0
 
+        rider_snapshot = snapshots.get(rider.slot)
+        if not rider_snapshot:
+            return 1.0, None, None, 0, 0.0
+        rider_distance = float(rider_snapshot["distance_m"])
+        rider_speed = float(rider_snapshot["speed_mps"])
+
         nearest_gap: float | None = None
         leader_slot: int | None = None
         riders_ahead = 0
-        for other in self.riders:
-            if other.slot == rider.slot:
+        for other_slot, snapshot in snapshots.items():
+            if other_slot == rider.slot:
                 continue
-            if other.slot not in self.active_slots or not other.exam_running:
+            if not bool(snapshot["exam_running"]):
                 continue
-            if other.connection_status == STATUS_DROPPED:
+            if snapshot["connection_status"] == STATUS_DROPPED:
                 continue
-            gap = other.simulated_distance_m - rider.simulated_distance_m
+            gap = float(snapshot["distance_m"]) - rider_distance
             if gap <= 0:
                 continue
             if gap <= DRAFT_EFFECTIVE_GAP_M:
                 riders_ahead += 1
             if nearest_gap is None or gap < nearest_gap:
                 nearest_gap = gap
-                leader_slot = other.slot
+                leader_slot = other_slot
 
         if nearest_gap is None:
             return 1.0, None, None, 0, 0.0
 
-        multiplier = draft_aero_multiplier(nearest_gap, rider.simulated_speed_mps, riders_ahead=riders_ahead)
+        multiplier = draft_aero_multiplier(nearest_gap, rider_speed, riders_ahead=riders_ahead)
         if multiplier >= 0.999:
             return 1.0, None, None, 0, 0.0
-        savings_watts = estimate_draft_savings_watts(rider.simulated_speed_mps, multiplier)
+        savings_watts = estimate_draft_savings_watts(rider_speed, multiplier)
         return multiplier, nearest_gap, leader_slot, riders_ahead, savings_watts
+
+    def _draft_snapshots(self) -> dict[int, dict[str, object]]:
+        return {
+            rider.slot: {
+                "distance_m": rider.simulated_distance_m,
+                "speed_mps": rider.simulated_speed_mps,
+                "connection_status": rider.connection_status,
+                "exam_running": rider.exam_running,
+            }
+            for rider in self.riders
+            if rider.slot in self.active_slots
+        }
 
     def _record_sample(self, rider: RiderState, timestamp: float) -> None:
         if not self.exam_id or self.start_time is None:

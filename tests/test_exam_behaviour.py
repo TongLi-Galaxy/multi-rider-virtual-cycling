@@ -105,6 +105,35 @@ class ExamBehaviourTests(unittest.TestCase):
         self.assertGreater(follower.draft_savings_watts, 0.0)
         self.assertTrue(controller.summary_rows()[0]["drafting_enabled"])
 
+    def test_drafting_uses_same_tick_snapshot_for_all_riders(self) -> None:
+        controller = ExamController(duration_seconds=60)
+        controller.set_exam_mode(EXAM_MODE_ROUTE)
+        controller.set_drafting_enabled(True)
+        controller.set_route(RouteProfile([RouteSegment(1000.0, 0.0)]))
+        for slot in (1, 2):
+            rider = controller.rider(slot)
+            rider.apply_binding(DeviceBinding(slot=slot, device_name=f"Trainer {slot}", device_address=f"TEST-{slot}"))
+            rider.connection_status = STATUS_CONNECTED
+
+        ok, message = controller.prepare()
+        self.assertTrue(ok, message)
+        ok, message = controller.start()
+        self.assertTrue(ok, message)
+        assert controller.start_time is not None
+
+        leader = controller.rider(1)
+        follower = controller.rider(2)
+        leader.simulated_distance_m = 26.9
+        leader.simulated_speed_mps = 5.0
+        follower.simulated_distance_m = 15.0
+        follower.simulated_speed_mps = 12.0
+
+        controller.tick(controller.start_time + 1.0)
+
+        self.assertEqual(follower.draft_leader_slot, 1)
+        self.assertAlmostEqual(follower.draft_gap_m or 0.0, 11.9)
+        self.assertLess(follower.draft_aero_multiplier, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
