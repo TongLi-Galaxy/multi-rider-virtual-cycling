@@ -5,6 +5,7 @@ import unittest
 from app.core.exam_controller import EXAM_MODE_ROUTE, EXAM_MODE_TIME, ExamController
 from app.core.rider_state import DeviceBinding, STATUS_CONNECTED, STATUS_DROPPED
 from app.core.route import RouteProfile, RouteSegment
+from app.core.simulation import draft_aero_multiplier
 
 
 class ExamBehaviourTests(unittest.TestCase):
@@ -61,6 +62,48 @@ class ExamBehaviourTests(unittest.TestCase):
         summary = controller.summary_rows()[0]
         self.assertEqual(summary["average_heart_rate"], "")
         self.assertEqual(summary["max_heart_rate"], "")
+
+    def test_draft_multiplier_depends_on_gap_and_speed(self) -> None:
+        self.assertEqual(draft_aero_multiplier(3.0, 10.0 / 3.6), 1.0)
+        self.assertEqual(draft_aero_multiplier(20.0, 12.0), 1.0)
+        self.assertLess(draft_aero_multiplier(2.0, 12.0), 1.0)
+        self.assertLess(draft_aero_multiplier(2.0, 12.0), draft_aero_multiplier(8.0, 12.0))
+        self.assertLess(
+            draft_aero_multiplier(2.0, 12.0, riders_ahead=3),
+            draft_aero_multiplier(2.0, 12.0, riders_ahead=1),
+        )
+
+    def test_route_drafting_tracks_nearest_leader(self) -> None:
+        controller = ExamController(duration_seconds=60)
+        controller.set_exam_mode(EXAM_MODE_ROUTE)
+        controller.set_drafting_enabled(True)
+        controller.set_route(RouteProfile([RouteSegment(1000.0, 0.0)]))
+        for slot in (1, 2, 3):
+            rider = controller.rider(slot)
+            rider.apply_binding(DeviceBinding(slot=slot, device_name=f"Trainer {slot}", device_address=f"TEST-{slot}"))
+            rider.connection_status = STATUS_CONNECTED
+
+        ok, message = controller.prepare()
+        self.assertTrue(ok, message)
+        ok, message = controller.start()
+        self.assertTrue(ok, message)
+        assert controller.start_time is not None
+
+        leader = controller.rider(1)
+        follower = controller.rider(2)
+        second_leader = controller.rider(3)
+        leader.simulated_distance_m = 20.0
+        second_leader.simulated_distance_m = 24.0
+        follower.simulated_distance_m = 15.0
+        follower.simulated_speed_mps = 12.0
+
+        controller.tick(controller.start_time + 1.0)
+
+        self.assertEqual(follower.draft_leader_slot, 1)
+        self.assertEqual(follower.draft_riders_ahead, 2)
+        self.assertLess(follower.draft_aero_multiplier, 1.0)
+        self.assertGreater(follower.draft_savings_watts, 0.0)
+        self.assertTrue(controller.summary_rows()[0]["drafting_enabled"])
 
 
 if __name__ == "__main__":

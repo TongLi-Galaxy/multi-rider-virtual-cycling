@@ -14,6 +14,7 @@ class AppSettings:
     bike_weight_kg: float = 10.0
     mock_mode: bool = False
     push_grade: bool = True
+    drafting_enabled: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
@@ -23,6 +24,7 @@ class AppSettings:
             bike_weight_kg=min(30.0, max(5.0, float(data.get("bike_weight_kg", 10.0)))),
             mock_mode=bool(data.get("mock_mode", False)),
             push_grade=bool(data.get("push_grade", True)),
+            drafting_enabled=bool(data.get("drafting_enabled", False)),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -32,6 +34,7 @@ class AppSettings:
             "bike_weight_kg": round(self.bike_weight_kg, 1),
             "mock_mode": self.mock_mode,
             "push_grade": self.push_grade,
+            "drafting_enabled": self.drafting_enabled,
         }
 
 
@@ -53,4 +56,3 @@ def save_settings(settings: AppSettings, path: Path | None = None) -> None:
         json.dumps(settings.to_dict(), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-

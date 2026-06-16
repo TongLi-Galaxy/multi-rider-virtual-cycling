@@ -102,7 +102,7 @@ class RiderPanel(QtWidgets.QFrame):
         self.avg_hr_label = QtWidgets.QLabel("-- bpm")
         self.grade_label = QtWidgets.QLabel("0.0%")
         self.elapsed_label = QtWidgets.QLabel("00:00")
-        self.dropout_label = QtWidgets.QLabel("0.0 s")
+        self.draft_label = QtWidgets.QLabel("--")
         self.distance_label = QtWidgets.QLabel("0 m")
         self.final_label = QtWidgets.QLabel("-")
 
@@ -114,7 +114,7 @@ class RiderPanel(QtWidgets.QFrame):
         self._add_value(detail_grid, 1, 0, "平均心率", self.avg_hr_label)
         self._add_value(detail_grid, 1, 1, "坡度", self.grade_label)
         self._add_value(detail_grid, 2, 0, "已用时间", self.elapsed_label)
-        self._add_value(detail_grid, 2, 1, "掉线", self.dropout_label)
+        self._add_value(detail_grid, 2, 1, "蹭风", self.draft_label)
         self._add_value(detail_grid, 3, 0, "距离", self.distance_label)
         self._add_value(detail_grid, 3, 1, "成绩", self.final_label)
 
@@ -209,8 +209,15 @@ class RiderPanel(QtWidgets.QFrame):
         )
         self.grade_label.setText(f"{rider.current_grade_percent:.1f}%")
         self.elapsed_label.setText(format_seconds(elapsed))
-        self.dropout_label.setText(f"{rider.dropout_time_at(now):.1f} s")
         self.distance_label.setText(f"{rider.simulated_distance_m:.0f} m")
+        if (
+            rider.draft_leader_slot is not None
+            and rider.draft_gap_m is not None
+            and rider.draft_aero_multiplier < 0.999
+        ):
+            self.draft_label.setText(f"{rider.draft_gap_m:.1f} m / {rider.draft_savings_watts:.0f} W")
+        else:
+            self.draft_label.setText("--")
         progress = 0.0
         if route_distance_m > 0:
             progress = min(1.0, max(0.0, rider.simulated_distance_m / route_distance_m))

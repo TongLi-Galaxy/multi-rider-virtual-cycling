@@ -12,7 +12,13 @@ from app.core.rider_state import (
     STATUS_CONNECTED,
     STATUS_DATA_OK,
     STATUS_DISCONNECTED,
+    STATUS_DROPPED,
     STATUS_UNSUPPORTED,
+)
+from app.core.simulation import (
+    DRAFT_EFFECTIVE_GAP_M,
+    draft_aero_multiplier,
+    estimate_draft_savings_watts,
 )
 
 EXAM_MODE_TIME = "time"
@@ -23,6 +29,7 @@ class ExamController:
     def __init__(self, duration_seconds: int = 60) -> None:
         self.duration_seconds = duration_seconds
         self.exam_mode = EXAM_MODE_TIME
+        self.drafting_enabled = False
         self.bike_weight_kg = 10.0
         self.riders = [RiderState(slot=index) for index in range(1, 5)]
         self.route_profile = RouteProfile()
@@ -50,6 +57,9 @@ class ExamController:
 
     def set_exam_mode(self, exam_mode: str) -> None:
         self.exam_mode = EXAM_MODE_ROUTE if exam_mode == EXAM_MODE_ROUTE else EXAM_MODE_TIME
+
+    def set_drafting_enabled(self, enabled: bool) -> None:
+        self.drafting_enabled = bool(enabled)
 
     def set_bike_weight(self, bike_weight_kg: float) -> None:
         self.bike_weight_kg = min(30.0, max(5.0, float(bike_weight_kg)))
@@ -176,20 +186,14 @@ class ExamController:
         rider = self.rider(slot)
         if rider.final_status == "completed":
             return
-        rider.advance_simulation(
+        self._advance_rider_simulation(
+            rider,
             now,
-            self.route_profile,
-            bike_weight_kg=self.bike_weight_kg,
-            loop_route=self.exam_mode == EXAM_MODE_TIME,
-            finish_distance_m=self._finish_distance_m(),
         )
         accepted = rider.add_power(now, power)
-        rider.advance_simulation(
+        self._advance_rider_simulation(
+            rider,
             now,
-            self.route_profile,
-            bike_weight_kg=self.bike_weight_kg,
-            loop_route=self.exam_mode == EXAM_MODE_TIME,
-            finish_distance_m=self._finish_distance_m(),
         )
         if self.running and accepted:
             self._record_sample(rider, now)
@@ -203,12 +207,9 @@ class ExamController:
         for rider in self.riders:
             if rider.slot not in self.active_slots or not rider.exam_running:
                 continue
-            route_finished = rider.advance_simulation(
+            route_finished = self._advance_rider_simulation(
+                rider,
                 current,
-                self.route_profile,
-                bike_weight_kg=self.bike_weight_kg,
-                loop_route=self.exam_mode == EXAM_MODE_TIME,
-                finish_distance_m=self._finish_distance_m(),
             )
             rider.check_dropout(current)
             second = int(elapsed)
@@ -241,6 +242,7 @@ class ExamController:
                 self.exam_id,
                 self.duration_seconds,
                 self.exam_mode,
+                self.drafting_enabled,
                 self._finish_distance_m() or self.route_profile.total_distance_m,
                 self.bike_weight_kg,
                 self.start_time,
@@ -265,12 +267,9 @@ class ExamController:
             if rider.final_status == "completed" and aborted:
                 continue
             if rider.exam_running:
-                rider.advance_simulation(
+                self._advance_rider_simulation(
+                    rider,
                     finish_time,
-                    self.route_profile,
-                    bike_weight_kg=self.bike_weight_kg,
-                    loop_route=self.exam_mode == EXAM_MODE_TIME,
-                    finish_distance_m=self._finish_distance_m(),
                 )
                 rider.finish_exam(finish_time, status)
                 self._record_sample(rider, finish_time)
@@ -292,6 +291,58 @@ class ExamController:
         total = self.route_profile.total_distance_m
         return total if total > 0 else None
 
+    def _advance_rider_simulation(self, rider: RiderState, now: float) -> bool:
+        multiplier, gap_m, leader_slot, riders_ahead, savings_watts = self._draft_effect_for(rider)
+        return rider.advance_simulation(
+            now,
+            self.route_profile,
+            bike_weight_kg=self.bike_weight_kg,
+            loop_route=self.exam_mode == EXAM_MODE_TIME,
+            finish_distance_m=self._finish_distance_m(),
+            draft_aero_multiplier=multiplier,
+            draft_gap_m=gap_m,
+            draft_leader_slot=leader_slot,
+            draft_riders_ahead=riders_ahead,
+            draft_savings_watts=savings_watts,
+        )
+
+    def _draft_effect_for(
+        self,
+        rider: RiderState,
+    ) -> tuple[float, float | None, int | None, int, float]:
+        if not self.drafting_enabled or self.exam_mode != EXAM_MODE_ROUTE:
+            return 1.0, None, None, 0, 0.0
+        if not rider.exam_running or rider.connection_status == STATUS_DROPPED:
+            return 1.0, None, None, 0, 0.0
+
+        nearest_gap: float | None = None
+        leader_slot: int | None = None
+        riders_ahead = 0
+        for other in self.riders:
+            if other.slot == rider.slot:
+                continue
+            if other.slot not in self.active_slots or not other.exam_running:
+                continue
+            if other.connection_status == STATUS_DROPPED:
+                continue
+            gap = other.simulated_distance_m - rider.simulated_distance_m
+            if gap <= 0:
+                continue
+            if gap <= DRAFT_EFFECTIVE_GAP_M:
+                riders_ahead += 1
+            if nearest_gap is None or gap < nearest_gap:
+                nearest_gap = gap
+                leader_slot = other.slot
+
+        if nearest_gap is None:
+            return 1.0, None, None, 0, 0.0
+
+        multiplier = draft_aero_multiplier(nearest_gap, rider.simulated_speed_mps, riders_ahead=riders_ahead)
+        if multiplier >= 0.999:
+            return 1.0, None, None, 0, 0.0
+        savings_watts = estimate_draft_savings_watts(rider.simulated_speed_mps, multiplier)
+        return multiplier, nearest_gap, leader_slot, riders_ahead, savings_watts
+
     def _record_sample(self, rider: RiderState, timestamp: float) -> None:
         if not self.exam_id or self.start_time is None:
             return
@@ -307,6 +358,11 @@ class ExamController:
                 grade_percent=rider.current_grade_percent,
                 segment_index=rider.current_segment_index,
                 segment_progress=rider.current_segment_progress,
+                draft_aero_multiplier=rider.draft_aero_multiplier,
+                draft_gap_m=rider.draft_gap_m,
+                draft_leader_slot=rider.draft_leader_slot,
+                draft_riders_ahead=rider.draft_riders_ahead,
+                draft_savings_watts=rider.draft_savings_watts,
                 heart_rate_bpm=None
                 if rider.heart_rate_metrics.current_value is None
                 else int(rider.heart_rate_metrics.current_value),

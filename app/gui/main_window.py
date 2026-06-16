@@ -145,6 +145,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.controller.set_exam_mode(self.settings.exam_mode)
         self.controller.set_duration(self.settings.duration_seconds)
         self.controller.set_bike_weight(self.settings.bike_weight_kg)
+        self.controller.set_drafting_enabled(self.settings.drafting_enabled)
         self.controller.set_route(self.route_profile)
         self.config_path = default_config_path()
         self.ble_runtime: BleRuntime | None = None
@@ -350,6 +351,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.push_grade_checkbox.setChecked(self.settings.push_grade)
         self.push_grade_checkbox.stateChanged.connect(self._settings_changed)
 
+        self.drafting_checkbox = QtWidgets.QCheckBox("线路赛启用蹭风")
+        self.drafting_checkbox.setChecked(self.settings.drafting_enabled)
+        self.drafting_checkbox.stateChanged.connect(self._settings_changed)
+
         exam_layout.addWidget(QtWidgets.QLabel("模式"), 0, 0)
         exam_layout.addWidget(self.exam_mode_combo, 0, 1)
         exam_layout.addWidget(QtWidgets.QLabel("时长"), 0, 2)
@@ -359,6 +364,7 @@ class MainWindow(QtWidgets.QMainWindow):
         exam_layout.addWidget(self.bike_weight_spin, 1, 1)
         exam_layout.addWidget(self.mock_checkbox, 1, 2)
         exam_layout.addWidget(self.push_grade_checkbox, 1, 3, 1, 2)
+        exam_layout.addWidget(self.drafting_checkbox, 2, 1, 1, 2)
         exam_layout.setColumnStretch(5, 1)
 
         device_box = QtWidgets.QGroupBox("设备与选手")
@@ -572,9 +578,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bike_weight_spin.setValue(self.settings.bike_weight_kg)
         self.mock_checkbox.setChecked(self.settings.mock_mode)
         self.push_grade_checkbox.setChecked(self.settings.push_grade)
+        self.drafting_checkbox.setChecked(self.settings.drafting_enabled)
         duration_enabled = self.settings.exam_mode == EXAM_MODE_TIME
         self.duration_combo.setEnabled(duration_enabled)
         self.custom_seconds.setEnabled(duration_enabled)
+        self.drafting_checkbox.setEnabled(self.settings.exam_mode == EXAM_MODE_ROUTE)
         self._update_mode_status_label()
         self._applying_settings_widgets = False
 
@@ -589,14 +597,17 @@ class MainWindow(QtWidgets.QMainWindow):
             bike_weight_kg=float(self.bike_weight_spin.value()),
             mock_mode=self.mock_checkbox.isChecked(),
             push_grade=self.push_grade_checkbox.isChecked(),
+            drafting_enabled=self.drafting_checkbox.isChecked(),
         )
         self.controller.set_exam_mode(self.settings.exam_mode)
         self.controller.set_duration(self.settings.duration_seconds)
         self.controller.set_bike_weight(self.settings.bike_weight_kg)
+        self.controller.set_drafting_enabled(self.settings.drafting_enabled)
         save_settings(self.settings)
         duration_enabled = self.settings.exam_mode == EXAM_MODE_TIME
         self.duration_combo.setEnabled(duration_enabled)
         self.custom_seconds.setEnabled(duration_enabled)
+        self.drafting_checkbox.setEnabled(self.settings.exam_mode == EXAM_MODE_ROUTE)
         if hasattr(self, "route_total_label"):
             self._update_route_total_label()
         self._update_mode_status_label()
@@ -606,7 +617,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not hasattr(self, "mode_status_label"):
             return
         if self.settings.exam_mode == EXAM_MODE_ROUTE:
-            text = f"固定线路 | {self.route_profile.total_distance_m:.0f} m | 车重 {self.settings.bike_weight_kg:.1f} kg"
+            draft_text = "蹭风开" if self.settings.drafting_enabled else "蹭风关"
+            text = f"固定线路 | {self.route_profile.total_distance_m:.0f} m | 车重 {self.settings.bike_weight_kg:.1f} kg | {draft_text}"
         else:
             text = f"固定时长 | {self.settings.duration_seconds} 秒 | 车重 {self.settings.bike_weight_kg:.1f} kg"
         self.mode_status_label.setText(text)
@@ -812,6 +824,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.bike_weight_spin,
             self.mock_checkbox,
             self.push_grade_checkbox,
+            self.drafting_checkbox,
             self.rider_settings_table,
             self.scan_button,
             self.connect_button,
@@ -820,6 +833,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if enabled and self.settings.exam_mode == EXAM_MODE_ROUTE:
             self.duration_combo.setEnabled(False)
             self.custom_seconds.setEnabled(False)
+        if enabled and self.settings.exam_mode != EXAM_MODE_ROUTE:
+            self.drafting_checkbox.setEnabled(False)
 
     def _open_scan_dialog(self) -> None:
         if self.controller.running:

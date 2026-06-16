@@ -61,6 +61,11 @@ class SampleRecord:
     grade_percent: float
     segment_index: int
     segment_progress: float
+    draft_aero_multiplier: float
+    draft_gap_m: float | None
+    draft_leader_slot: int | None
+    draft_riders_ahead: int
+    draft_savings_watts: float
     heart_rate_bpm: int | None
     status: str
 
@@ -76,6 +81,11 @@ class SampleRecord:
             "grade_percent": round(self.grade_percent, 2),
             "segment_index": self.segment_index,
             "segment_progress": round(self.segment_progress, 4),
+            "draft_aero_multiplier": round(self.draft_aero_multiplier, 4),
+            "draft_gap_m": "" if self.draft_gap_m is None else round(self.draft_gap_m, 2),
+            "draft_leader_slot": "" if self.draft_leader_slot is None else self.draft_leader_slot,
+            "draft_riders_ahead": self.draft_riders_ahead,
+            "draft_savings_watts": round(self.draft_savings_watts, 1),
             "heart_rate_bpm": "" if self.heart_rate_bpm is None else self.heart_rate_bpm,
             "status": self.status,
         }
@@ -102,6 +112,11 @@ class RiderState:
     current_segment_progress: float = 0.0
     current_segment_distance_m: float = 0.0
     current_segment_length_m: float = 1.0
+    draft_aero_multiplier: float = 1.0
+    draft_gap_m: float | None = None
+    draft_leader_slot: int | None = None
+    draft_riders_ahead: int = 0
+    draft_savings_watts: float = 0.0
     last_simulation_timestamp: float | None = None
     last_power_timestamp: float | None = None
     dropout_started_at: float | None = None
@@ -142,6 +157,11 @@ class RiderState:
         self.current_segment_progress = 0.0
         self.current_segment_distance_m = 0.0
         self.current_segment_length_m = 1.0
+        self.draft_aero_multiplier = 1.0
+        self.draft_gap_m = None
+        self.draft_leader_slot = None
+        self.draft_riders_ahead = 0
+        self.draft_savings_watts = 0.0
         self.last_simulation_timestamp = None
         self.last_power_timestamp = None
         self.dropout_started_at = None
@@ -180,6 +200,11 @@ class RiderState:
         bike_weight_kg: float = 10.0,
         loop_route: bool = True,
         finish_distance_m: float | None = None,
+        draft_aero_multiplier: float = 1.0,
+        draft_gap_m: float | None = None,
+        draft_leader_slot: int | None = None,
+        draft_riders_ahead: int = 0,
+        draft_savings_watts: float = 0.0,
     ) -> bool:
         if self.final_status == "completed":
             return False
@@ -192,6 +217,11 @@ class RiderState:
 
         self.current_grade_percent = route.grade_at(self.simulated_distance_m, loop=loop_route)
         previous_speed_mps = self.simulated_speed_mps
+        self.draft_aero_multiplier = min(1.0, max(0.55, float(draft_aero_multiplier)))
+        self.draft_gap_m = draft_gap_m
+        self.draft_leader_slot = draft_leader_slot
+        self.draft_riders_ahead = max(0, int(draft_riders_ahead))
+        self.draft_savings_watts = max(0.0, float(draft_savings_watts))
         next_speed_mps = advance_speed_mps(
             previous_speed_mps,
             self._simulation_power(now),
@@ -199,6 +229,7 @@ class RiderState:
             bike_weight_kg,
             self.current_grade_percent,
             dt,
+            aero_drag_multiplier=self.draft_aero_multiplier,
         )
         if self.exam_running and dt > 0:
             previous_distance_m = self.simulated_distance_m
@@ -307,6 +338,7 @@ class RiderState:
         exam_id: str,
         duration_seconds: int,
         exam_mode: str,
+        drafting_enabled: bool,
         route_distance_m: float,
         bike_weight_kg: float,
         global_start: float | None,
@@ -324,6 +356,7 @@ class RiderState:
             "weight_kg": round(self.weight_kg, 1),
             "bike_weight_kg": round(bike_weight_kg, 1),
             "exam_mode": exam_mode,
+            "drafting_enabled": drafting_enabled,
             "duration_seconds": duration_seconds,
             "route_distance_m": round(route_distance_m, 2),
             "finish_time_seconds": round(elapsed, 3) if route_result else "",
