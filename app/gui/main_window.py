@@ -19,7 +19,7 @@ from app.core.exporter import export_exam_csv
 from app.core.rider_state import STATUS_CONNECTING, STATUS_DISCONNECTED
 from app.core.route import RouteProfile, RouteSegment, load_route, save_route
 from app.core.settings import AppSettings, EXAM_LAYOUT_AUTO, load_settings, save_settings
-from app.gui.rider_panel import RiderPanel
+from app.gui.rider_panel import RiderPanel, format_seconds
 from app.gui.route_profile_widget import RouteProfileWidget
 from app.gui.scan_dialog import ScanDialog
 from app.utils.logger import get_app_logger
@@ -163,6 +163,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._populate_rider_settings_table()
         self._refresh_all_panels()
         self._update_exam_route_visibility()
+        self._update_exam_elapsed_label()
 
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(250)
@@ -196,8 +197,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.export_button.setEnabled(False)
 
         self.mode_status_label = QtWidgets.QLabel("")
+        self.exam_elapsed_label = QtWidgets.QLabel("")
+        self.exam_elapsed_label.setObjectName("examElapsedLabel")
+        self.exam_elapsed_label.setVisible(False)
         controls_layout.addWidget(self.mode_status_label)
         controls_layout.addStretch(1)
+        controls_layout.addWidget(self.exam_elapsed_label)
         for button in [
             self.prepare_button,
             self.start_button,
@@ -224,29 +229,6 @@ class MainWindow(QtWidgets.QMainWindow):
         page_layout.setContentsMargins(0, 0, 0, 0)
         page_layout.setSpacing(6)
 
-        display_bar = QtWidgets.QFrame()
-        display_bar.setObjectName("examDisplayBar")
-        display_layout = QtWidgets.QHBoxLayout(display_bar)
-        display_layout.setContentsMargins(8, 6, 8, 6)
-        display_layout.setSpacing(8)
-
-        self.exam_layout_combo = QtWidgets.QComboBox()
-        for label, mode in [
-            ("自动", EXAM_LAYOUT_AUTO),
-            ("1列", "1"),
-            ("2列", "2"),
-            ("3列", "3"),
-            ("4列", "4"),
-        ]:
-            self.exam_layout_combo.addItem(label, mode)
-        layout_index = self.exam_layout_combo.findData(self.settings.exam_layout_mode)
-        self.exam_layout_combo.setCurrentIndex(max(0, layout_index))
-        self.exam_layout_combo.currentIndexChanged.connect(self._exam_layout_mode_changed)
-
-        display_layout.addWidget(QtWidgets.QLabel("显示"))
-        display_layout.addWidget(self.exam_layout_combo)
-        display_layout.addStretch(1)
-
         self.exam_route_profile_widget = RouteProfileWidget()
         self.exam_route_profile_widget.setMinimumHeight(150)
         self.exam_route_profile_widget.setMaximumHeight(180)
@@ -269,7 +251,6 @@ class MainWindow(QtWidgets.QMainWindow):
             panel.hide()
 
         self.exam_scroll.setWidget(self.panels_container)
-        page_layout.addWidget(display_bar)
         page_layout.addWidget(self.exam_route_profile_widget)
         page_layout.addWidget(self.exam_scroll, 1)
         self._apply_exam_layout(force=True)
@@ -367,6 +348,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bike_weight_spin.setValue(self.settings.bike_weight_kg)
         self.bike_weight_spin.valueChanged.connect(self._settings_changed)
 
+        self.exam_layout_combo = QtWidgets.QComboBox()
+        for label, mode in [
+            ("自动", EXAM_LAYOUT_AUTO),
+            ("1列", "1"),
+            ("2列", "2"),
+            ("3列", "3"),
+            ("4列", "4"),
+        ]:
+            self.exam_layout_combo.addItem(label, mode)
+        layout_index = self.exam_layout_combo.findData(self.settings.exam_layout_mode)
+        self.exam_layout_combo.setCurrentIndex(max(0, layout_index))
+        self.exam_layout_combo.currentIndexChanged.connect(self._exam_layout_mode_changed)
+
         self.mock_checkbox = QtWidgets.QCheckBox("Mock 模式")
         self.mock_checkbox.setChecked(self.settings.mock_mode)
         self.mock_checkbox.stateChanged.connect(self._settings_changed)
@@ -379,6 +373,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.drafting_checkbox.setChecked(self.settings.drafting_enabled)
         self.drafting_checkbox.stateChanged.connect(self._settings_changed)
 
+        checkbox_row = QtWidgets.QWidget()
+        checkbox_layout = QtWidgets.QHBoxLayout(checkbox_row)
+        checkbox_layout.setContentsMargins(0, 0, 0, 0)
+        checkbox_layout.setSpacing(16)
+        checkbox_layout.addWidget(self.mock_checkbox)
+        checkbox_layout.addWidget(self.push_grade_checkbox)
+        checkbox_layout.addWidget(self.drafting_checkbox)
+        checkbox_layout.addStretch(1)
+
         exam_layout.addWidget(QtWidgets.QLabel("模式"), 0, 0)
         exam_layout.addWidget(self.exam_mode_combo, 0, 1)
         exam_layout.addWidget(QtWidgets.QLabel("时长"), 0, 2)
@@ -386,9 +389,9 @@ class MainWindow(QtWidgets.QMainWindow):
         exam_layout.addWidget(self.custom_seconds, 0, 4)
         exam_layout.addWidget(QtWidgets.QLabel("整车自重"), 1, 0)
         exam_layout.addWidget(self.bike_weight_spin, 1, 1)
-        exam_layout.addWidget(self.mock_checkbox, 1, 2)
-        exam_layout.addWidget(self.push_grade_checkbox, 1, 3, 1, 2)
-        exam_layout.addWidget(self.drafting_checkbox, 2, 1, 1, 2)
+        exam_layout.addWidget(QtWidgets.QLabel("显示列数"), 1, 2)
+        exam_layout.addWidget(self.exam_layout_combo, 1, 3)
+        exam_layout.addWidget(checkbox_row, 2, 0, 1, 6)
         exam_layout.setColumnStretch(5, 1)
 
         device_box = QtWidgets.QGroupBox("设备与选手")
@@ -469,10 +472,44 @@ class MainWindow(QtWidgets.QMainWindow):
             border-radius: 6px;
             gridline-color: #e8eef2;
         }
-        #controlBar, #examDisplayBar, #riderPanel {
+        #controlBar, #riderPanel {
             background: #ffffff;
             border: 1px solid #d9e0e7;
             border-radius: 6px;
+        }
+        #examElapsedLabel {
+            min-width: 86px;
+            padding: 4px 8px;
+            color: #0c3f4d;
+            background: #e6f3f0;
+            border: 1px solid #b9d9d2;
+            border-radius: 4px;
+            font-weight: 800;
+        }
+        QCheckBox {
+            spacing: 6px;
+        }
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+            border: 1px solid #7d8b96;
+            border-radius: 3px;
+            background: #ffffff;
+        }
+        QCheckBox::indicator:hover {
+            border-color: #245b73;
+        }
+        QCheckBox::indicator:checked {
+            background: #245b73;
+            border: 1px solid #245b73;
+        }
+        QCheckBox::indicator:disabled {
+            background: #edf2f4;
+            border: 1px solid #b8c4cd;
+        }
+        QCheckBox::indicator:checked:disabled {
+            background: #6f8792;
+            border: 1px solid #6f8792;
         }
         #panelTitle {
             font-size: 19px;
@@ -527,6 +564,12 @@ class MainWindow(QtWidgets.QMainWindow):
             font-size: 42px;
             font-weight: 800;
             color: #0c3f4d;
+        }
+        #primaryMetric[density="compact"] {
+            font-size: 38px;
+        }
+        #primaryMetric[density="dense"] {
+            font-size: 34px;
         }
         #metricCaption {
             color: #64727d;
@@ -864,6 +907,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.duration_combo,
             self.custom_seconds,
             self.bike_weight_spin,
+            self.exam_layout_combo,
             self.mock_checkbox,
             self.push_grade_checkbox,
             self.drafting_checkbox,
@@ -961,6 +1005,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_settings_controls_enabled(False)
         for panel in self.panels.values():
             panel.set_inputs_locked(True)
+        self._update_exam_elapsed_label()
         self._log(message)
 
     def _terminate_exam(self) -> None:
@@ -983,6 +1028,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for panel in self.panels.values():
             panel.set_inputs_locked(False)
         self._refresh_all_panels()
+        self._update_exam_elapsed_label()
         self._log("考试数据已重置")
 
     def _export_csv(self) -> None:
@@ -1006,6 +1052,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_timer(self) -> None:
         finished = self.controller.tick()
+        self._update_exam_elapsed_label()
         if self.controller.running:
             self._push_route_grades()
         self._refresh_all_panels()
@@ -1037,6 +1084,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for panel in self.panels.values():
             panel.set_inputs_locked(False)
         self._refresh_all_panels()
+        self._update_exam_elapsed_label()
 
     def _rider_name_changed(self, slot: int, name: str) -> None:
         self.controller.set_rider_name(slot, name)
@@ -1084,8 +1132,20 @@ class MainWindow(QtWidgets.QMainWindow):
             distances = {rider.slot: rider.simulated_distance_m for rider in self.controller.riders}
             self.route_profile_widget.set_rider_distances(distances)
             self.exam_route_profile_widget.set_rider_distances(distances)
-            self._apply_exam_layout()
             self._update_exam_route_visibility()
+            self._apply_exam_layout()
+
+    def _update_exam_elapsed_label(self) -> None:
+        if not hasattr(self, "exam_elapsed_label"):
+            return
+        if self.controller.start_time is None:
+            self.exam_elapsed_label.clear()
+            self.exam_elapsed_label.setVisible(False)
+            return
+
+        prefix = "时长" if self.controller.running else "用时"
+        self.exam_elapsed_label.setText(f"{prefix} {format_seconds(self.controller.current_elapsed())}")
+        self.exam_elapsed_label.setVisible(True)
 
     def _exam_visible_slots(self) -> list[int]:
         configured = [
@@ -1178,12 +1238,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_exam_route_visibility(self) -> None:
         if not hasattr(self, "exam_route_profile_widget"):
             return
-        self.exam_route_profile_widget.setVisible(self.width() >= 980 and self.height() >= 740)
+        compact = self.height() < 680
+        self.exam_route_profile_widget.setVisible(True)
+        self.exam_route_profile_widget.setMinimumHeight(88 if compact else 150)
+        self.exam_route_profile_widget.setMaximumHeight(105 if compact else 180)
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
-        self._apply_exam_layout()
         self._update_exam_route_visibility()
+        self._apply_exam_layout()
 
     def _log(self, message: str) -> None:
         timestamp = time.strftime("%H:%M:%S")

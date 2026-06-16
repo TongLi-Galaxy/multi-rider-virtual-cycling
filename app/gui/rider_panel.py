@@ -44,6 +44,11 @@ class RiderPanel(QtWidgets.QFrame):
 
         self.name_label = QtWidgets.QLabel("选手")
         self.name_label.setObjectName("riderNameLabel")
+        self.name_label.setMinimumWidth(0)
+        self.name_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self._updating_weight = False
         self._last_emitted_weight: float | None = None
         self.weight_input = QtWidgets.QDoubleSpinBox()
@@ -70,10 +75,12 @@ class RiderPanel(QtWidgets.QFrame):
         self.speed_label.setObjectName("primaryMetric")
         self.power_label = QtWidgets.QLabel("--")
         self.power_label.setObjectName("primaryMetric")
+        for metric_label in [self.speed_label, self.power_label]:
+            metric_label.setProperty("density", "regular")
         self.status_dot = QtWidgets.QLabel("●")
         self.status_dot.setObjectName("statusDot")
 
-        self.speed_caption = QtWidgets.QLabel("模拟速度 km/h")
+        self.speed_caption = QtWidgets.QLabel("速度 km/h")
         self.power_caption = QtWidgets.QLabel("功率 W")
         self.speed_caption.setObjectName("metricCaption")
         self.power_caption.setObjectName("metricCaption")
@@ -111,6 +118,11 @@ class RiderPanel(QtWidgets.QFrame):
         self.draft_label = QtWidgets.QLabel("--")
         self.distance_label = QtWidgets.QLabel("0 m")
         self.final_label = QtWidgets.QLabel("-")
+        self.compact_draft_label = QtWidgets.QLabel("--")
+        self.compact_draft_label.setObjectName("fieldValue")
+        self.compact_draft_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
 
         self.detail_widget = QtWidgets.QWidget()
         detail_grid = QtWidgets.QGridLayout(self.detail_widget)
@@ -126,12 +138,24 @@ class RiderPanel(QtWidgets.QFrame):
         self._add_value(detail_grid, 3, 0, "距离", self.distance_label)
         self._add_value(detail_grid, 3, 1, "成绩", self.final_label)
 
+        self.compact_draft_widget = QtWidgets.QWidget()
+        compact_draft_layout = QtWidgets.QHBoxLayout(self.compact_draft_widget)
+        compact_draft_layout.setContentsMargins(0, 0, 0, 0)
+        compact_draft_layout.setSpacing(4)
+        compact_draft_title = QtWidgets.QLabel("蹭风")
+        compact_draft_title.setObjectName("fieldLabel")
+        compact_draft_layout.addWidget(compact_draft_title)
+        compact_draft_layout.addStretch(1)
+        compact_draft_layout.addWidget(self.compact_draft_label)
+        self.compact_draft_widget.hide()
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
         layout.addLayout(header)
         layout.addLayout(self.metric_grid)
         layout.addWidget(self.route_progress)
+        layout.addWidget(self.compact_draft_widget)
         layout.addWidget(self.detail_widget)
 
     def _add_value(
@@ -184,16 +208,26 @@ class RiderPanel(QtWidgets.QFrame):
         dense = density == "dense"
 
         self.detail_widget.setVisible(not compact)
-        self.route_progress.setVisible(not dense)
-        self.weight_input.setVisible(not dense)
+        self.route_progress.setVisible(True)
+        self.compact_draft_widget.setVisible(compact)
+        self.weight_input.setVisible(True)
+        self.weight_input.setFixedWidth(78 if dense else 86)
+        self._set_metric_density(density)
         self._set_metrics_stacked(dense)
 
         if dense:
-            self.setMinimumSize(168, 176)
+            self.setMinimumSize(176, 204)
         elif compact:
-            self.setMinimumSize(238, 148)
+            self.setMinimumSize(238, 174)
         else:
             self.setMinimumSize(300, 210)
+
+    def _set_metric_density(self, density: str) -> None:
+        for metric_label in [self.speed_label, self.power_label]:
+            metric_label.setProperty("density", density)
+            metric_label.style().unpolish(metric_label)
+            metric_label.style().polish(metric_label)
+            metric_label.update()
 
     def _set_metrics_stacked(self, stacked: bool) -> None:
         if stacked == self._metrics_stacked:
@@ -278,9 +312,11 @@ class RiderPanel(QtWidgets.QFrame):
             and rider.draft_gap_m is not None
             and rider.draft_aero_multiplier < 0.999
         ):
-            self.draft_label.setText(f"{rider.draft_gap_m:.1f} m / {rider.draft_savings_watts:.0f} W")
+            draft_text = f"{rider.draft_gap_m:.1f} m / {rider.draft_savings_watts:.0f} W"
         else:
-            self.draft_label.setText("--")
+            draft_text = "--"
+        self.draft_label.setText(draft_text)
+        self.compact_draft_label.setText(draft_text)
         progress = 0.0
         if route_distance_m > 0:
             progress = min(1.0, max(0.0, rider.simulated_distance_m / route_distance_m))
