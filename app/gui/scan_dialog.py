@@ -6,6 +6,7 @@ from PySide6 import QtCore, QtWidgets
 
 from app.core.exam_controller import MAX_RIDERS, MIN_RIDERS
 from app.ble.scanner import scan_ble_devices
+from app.gui.no_wheel import NoWheelComboBox, NoWheelSpinBox
 
 
 class ScanThread(QtCore.QThread):
@@ -28,13 +29,14 @@ class ScanDialog(QtWidgets.QDialog):
     device_selected = QtCore.Signal(int, dict)
     log_message = QtCore.Signal(str)
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(self, parent: QtWidgets.QWidget | None = None, max_slot: int = MAX_RIDERS) -> None:
         super().__init__(parent)
         self.setWindowTitle("BLE 设备扫描")
         self.resize(920, 520)
         self._scan_thread: ScanThread | None = None
+        self.max_slot = min(MAX_RIDERS, max(MIN_RIDERS, int(max_slot)))
 
-        self.timeout_spin = QtWidgets.QSpinBox()
+        self.timeout_spin = NoWheelSpinBox()
         self.timeout_spin.setRange(2, 30)
         self.timeout_spin.setValue(6)
         self.timeout_spin.setSuffix(" s")
@@ -42,8 +44,8 @@ class ScanDialog(QtWidgets.QDialog):
         self.scan_button = QtWidgets.QPushButton("扫描")
         self.scan_button.clicked.connect(self.start_scan)
 
-        self.slot_combo = QtWidgets.QComboBox()
-        for slot in range(MIN_RIDERS, MAX_RIDERS + 1):
+        self.slot_combo = NoWheelComboBox()
+        for slot in range(MIN_RIDERS, self.max_slot + 1):
             self.slot_combo.addItem(f"{slot}号分屏", slot)
 
         self.bind_button = QtWidgets.QPushButton("绑定到分屏")

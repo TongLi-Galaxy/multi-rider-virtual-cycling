@@ -77,6 +77,30 @@ class ExamBehaviourTests(unittest.TestCase):
         self.assertTrue(ok, message)
         self.assertEqual(controller.active_slots, set(range(1, MAX_RIDERS + 1)))
 
+    def test_rider_count_limits_selected_slots(self) -> None:
+        controller = ExamController(duration_seconds=60)
+        controller.set_rider_count(4)
+
+        self.assertEqual([rider.slot for rider in controller.selected_riders()], [1, 2, 3, 4])
+        self.assertEqual(len(controller.summary_rows()), 4)
+
+    def test_start_allows_unconnected_selected_riders(self) -> None:
+        controller = ExamController(duration_seconds=60)
+        controller.set_rider_count(4)
+        for slot in (1, 2, 3, 4):
+            rider = controller.rider(slot)
+            rider.apply_binding(DeviceBinding(slot=slot, device_name=f"Trainer {slot}", device_address=f"TEST-{slot}"))
+        for slot in (1, 3):
+            controller.rider(slot).connection_status = STATUS_CONNECTED
+
+        ok, message = controller.prepare()
+        self.assertTrue(ok, message)
+        ok, message = controller.start()
+        self.assertTrue(ok, message)
+        self.assertEqual(controller.active_slots, {1, 3})
+        self.assertTrue(controller.rider(1).exam_running)
+        self.assertFalse(controller.rider(2).exam_running)
+
     def test_draft_multiplier_depends_on_gap_and_speed(self) -> None:
         self.assertEqual(draft_aero_multiplier(3.0, 10.0 / 3.6), 1.0)
         self.assertEqual(draft_aero_multiplier(20.0, 12.0), 1.0)

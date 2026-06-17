@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.core.exam_controller import EXAM_MODE_TIME
+from app.core.exam_controller import EXAM_MODE_TIME, MAX_RIDERS, MIN_RIDERS
 
 EXAM_LAYOUT_AUTO = "auto"
 EXAM_LAYOUT_MODES = {EXAM_LAYOUT_AUTO, "1", "2", "3", "4"}
@@ -14,6 +14,7 @@ EXAM_LAYOUT_MODES = {EXAM_LAYOUT_AUTO, "1", "2", "3", "4"}
 class AppSettings:
     exam_mode: str = EXAM_MODE_TIME
     duration_seconds: int = 60
+    rider_count: int = 4
     bike_weight_kg: float = 10.0
     mock_mode: bool = False
     push_grade: bool = True
@@ -28,6 +29,10 @@ class AppSettings:
         return cls(
             exam_mode=str(data.get("exam_mode", EXAM_MODE_TIME)),
             duration_seconds=max(1, int(data.get("duration_seconds", 60))),
+            rider_count=min(
+                MAX_RIDERS,
+                max(MIN_RIDERS, int(data.get("rider_count", 4))),
+            ),
             bike_weight_kg=min(30.0, max(5.0, float(data.get("bike_weight_kg", 10.0)))),
             mock_mode=bool(data.get("mock_mode", False)),
             push_grade=bool(data.get("push_grade", True)),
@@ -39,6 +44,7 @@ class AppSettings:
         return {
             "exam_mode": self.exam_mode,
             "duration_seconds": self.duration_seconds,
+            "rider_count": self.rider_count,
             "bike_weight_kg": round(self.bike_weight_kg, 1),
             "mock_mode": self.mock_mode,
             "push_grade": self.push_grade,

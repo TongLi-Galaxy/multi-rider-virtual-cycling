@@ -303,8 +303,8 @@ class TrainerDeviceClient:
             result_code = await asyncio.wait_for(response_future, timeout=2.0)
         except asyncio.TimeoutError:
             self._pending_control_response.pop(opcode, None)
-            self.log_callback(f"[{self.slot}号] {description} 未收到 FTMS 控制响应")
-            return False
+            self.log_callback(f"[{self.slot}号] {description} 已写入，未收到 FTMS 控制响应，按已应用处理")
+            return True
 
         result_text = FTMS_RESULT_CODES.get(result_code, f"unknown result 0x{result_code:02x}")
         if result_code == FTMS_SUCCESS:

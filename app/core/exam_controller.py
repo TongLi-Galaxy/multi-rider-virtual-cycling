@@ -36,7 +36,7 @@ class ExamController:
         self.drafting_enabled = False
         self.bike_weight_kg = 10.0
         self.rider_count = min(MAX_RIDERS, max(MIN_RIDERS, int(rider_count)))
-        self.riders = [RiderState(slot=index) for index in range(1, self.rider_count + 1)]
+        self.riders = [RiderState(slot=index) for index in range(1, MAX_RIDERS + 1)]
         self.route_profile = RouteProfile()
         self.active_slots: set[int] = set()
         self.exam_id = ""
@@ -54,7 +54,7 @@ class ExamController:
                 slot = int(item.get("slot", 0))
             except (TypeError, ValueError):
                 continue
-            if MIN_RIDERS <= slot <= self.rider_count:
+            if MIN_RIDERS <= slot <= MAX_RIDERS:
                 by_slot[slot] = item
         for rider in self.riders:
             data = by_slot.get(rider.slot)
@@ -63,6 +63,9 @@ class ExamController:
 
     def bindings_to_config(self) -> dict[str, object]:
         return {"slots": [rider.to_binding().to_dict() for rider in self.riders]}
+
+    def set_rider_count(self, rider_count: int) -> None:
+        self.rider_count = min(MAX_RIDERS, max(MIN_RIDERS, int(rider_count)))
 
     def set_duration(self, duration_seconds: int) -> None:
         self.duration_seconds = max(1, int(duration_seconds))
@@ -117,32 +120,43 @@ class ExamController:
         rider.connection_message = "设备已绑定"
 
     def rider(self, slot: int) -> RiderState:
-        if slot < MIN_RIDERS or slot > self.rider_count:
-            raise ValueError(f"slot must be between {MIN_RIDERS} and {self.rider_count}")
+        if slot < MIN_RIDERS or slot > MAX_RIDERS:
+            raise ValueError(f"slot must be between {MIN_RIDERS} and {MAX_RIDERS}")
         return self.riders[slot - 1]
 
+    def selected_riders(self) -> list[RiderState]:
+        return self.riders[: self.rider_count]
+
     def active_riders(self) -> list[RiderState]:
-        return [r for r in self.riders if r.device_address or r.device_name]
+        return [r for r in self.selected_riders() if r.device_address or r.device_name]
+
+    def connected_riders(self) -> list[RiderState]:
+        return [
+            rider
+            for rider in self.active_riders()
+            if rider.connection_status in {STATUS_CONNECTED, STATUS_DATA_OK}
+        ]
 
     def prepare(self) -> tuple[bool, str]:
         active_riders = self.active_riders()
-        if not active_riders:
-            return False, "请先绑定或连接至少一台设备"
+        connected_riders = self.connected_riders()
+        if not connected_riders:
+            return False, "请先连接至少一台已选择的骑行台"
 
         unsupported = [r.slot for r in active_riders if r.connection_status == STATUS_UNSUPPORTED]
-        if unsupported:
-            return False, f"{unsupported} 号分屏不支持功率读取"
-
-        not_connected = [
+        skipped = [
             r.slot
             for r in active_riders
-            if r.connection_status not in {STATUS_CONNECTED, STATUS_DATA_OK}
+            if r.connection_status not in {STATUS_CONNECTED, STATUS_DATA_OK, STATUS_UNSUPPORTED}
         ]
-        if not_connected:
-            return False, f"{not_connected} 号分屏尚未连接"
 
         self.ready = True
-        return True, "准备完成，可以开始考试"
+        details = [f"已连接 {len(connected_riders)} / {self.rider_count} 台"]
+        if skipped:
+            details.append(f"跳过未连接 {skipped} 号")
+        if unsupported:
+            details.append(f"跳过不支持功率读取 {unsupported} 号")
+        return True, "准备完成，可以开始考试（" + "，".join(details) + "）"
 
     def start(self) -> tuple[bool, str]:
         if self.running:
@@ -158,7 +172,12 @@ class ExamController:
         self.end_time = None
         self.running = True
         self.locked = False
-        self.active_slots = {rider.slot for rider in self.active_riders()}
+        connected_riders = self.connected_riders()
+        if not connected_riders:
+            self.running = False
+            self.ready = False
+            return False, "没有已连接的骑行台，无法开始考试"
+        self.active_slots = {rider.slot for rider in connected_riders}
         self.samples.clear()
         for rider in self.riders:
             if rider.slot in self.active_slots:
@@ -269,7 +288,7 @@ class ExamController:
                 self.start_time,
                 self.end_time,
             )
-            for rider in self.riders
+            for rider in self.selected_riders()
         ]
 
     def sample_rows(self) -> list[dict[str, object]]:

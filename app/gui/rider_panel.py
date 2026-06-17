@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtWidgets
 
 from app.core.rider_state import RiderState
+from app.gui.no_wheel import NoWheelDoubleSpinBox
 
 SLOT_COLORS = {
     1: "#dc3b35",
@@ -51,7 +52,7 @@ class RiderPanel(QtWidgets.QFrame):
         )
         self._updating_weight = False
         self._last_emitted_weight: float | None = None
-        self.weight_input = QtWidgets.QDoubleSpinBox()
+        self.weight_input = NoWheelDoubleSpinBox()
         self.weight_input.setObjectName("riderWeightInput")
         self.weight_input.setRange(30.0, 200.0)
         self.weight_input.setDecimals(1)
