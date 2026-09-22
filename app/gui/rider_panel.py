@@ -187,6 +187,7 @@ class RiderPanel(QtWidgets.QFrame):
 
     def set_rider_name(self, name: str) -> None:
         self.name_label.setText(name or "选手")
+        self.name_label.setToolTip(name or "选手")
 
     def set_weight(self, weight_kg: float) -> None:
         if self.weight_input.hasFocus():
@@ -344,4 +345,5 @@ class RiderPanel(QtWidgets.QFrame):
             color = "#8a5a00"
         else:
             color = "#b3261e"
+        self.status_dot.setToolTip(status)
         self.status_dot.setStyleSheet(f"color: {color}; font-size: 18px; font-weight: 800;")

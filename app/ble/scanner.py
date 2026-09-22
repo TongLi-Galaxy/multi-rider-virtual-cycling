@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 
 from bleak import BleakScanner
 
+from app.ble.fec import FEC_SERVICE_UUID
+
 
 FTMS_SERVICE_UUID = "00001826-0000-1000-8000-00805f9b34fb"
 FTMS_INDOOR_BIKE_DATA_UUID = "00002ad2-0000-1000-8000-00805f9b34fb"
@@ -42,10 +44,16 @@ class ScannedDevice:
         )
 
     @property
+    def supports_fec(self) -> bool:
+        return FEC_SERVICE_UUID in {normalize_uuid(item) for item in self.service_uuids}
+
+    @property
     def support_label(self) -> str:
         labels: list[str] = []
         if self.supports_ftms:
             labels.append("FTMS")
+        if self.supports_fec:
+            labels.append("FE-C 蓝牙")
         if self.supports_cycling_power:
             labels.append("Cycling Power")
         return ", ".join(labels) if labels else "未知"
@@ -57,6 +65,7 @@ class ScannedDevice:
             "rssi": self.rssi,
             "service_uuids": self.service_uuids,
             "supports_ftms": self.supports_ftms,
+            "supports_fec": self.supports_fec,
             "supports_cycling_power": self.supports_cycling_power,
             "support_label": self.support_label,
         }

@@ -155,7 +155,17 @@ python main.py multi --addresses "地址1" "地址2" "地址3" ... "地址8" --d
 
 ### 坡度推送没有效果怎么办
 
-确认骑行台支持 FTMS Control Point 和 Indoor Bike Simulation Parameters。有些设备只广播 Cycling Power Service，只能读取功率，不能控制阻力。也有设备需要官方 App 断开后才允许第三方获取控制权。
+使用“固定线路”模式并勾选“推送坡度到骑行台”。连接日志会显示实际发现的控制通道：FTMS、FE-C over BLE，或不可用（仅采集功率）。扫描中的服务标签只是广播信息，以连接后的特征发现结果为准。
+
+Think X202 设备可能提供 Cycling Power 功率服务和 `6e40fec1-…` FE-C 蓝牙服务，而没有 FTMS 控制点。程序优先使用 FTMS；没有 FTMS 时使用 FE-C 的 `6e40fec3-…` 写入和 `6e40fec2-…` 通知特征。不会向未知厂商特征猜测发送阻力指令。
+
+- FTMS：请求控制权，设置模拟参数，启动/恢复负载；仅设备成功响应后缓存坡度。
+- FE-C：发送选手/整车重量配置、非零风阻及路况坡度参数，并请求命令状态页确认。FE-C 的坡度按 `(坡度 + 200) × 100` 编码，滚阻分辨率为 0.00005，不能复用 FTMS 报文。重量使用界面设置；轮径和传动比目前使用通用公路车默认值 0.70 m、2.49，未按实际挡位动态调整。
+- 日志区分“设备已确认”“写入但未确认”和“拒绝/不支持”；写入完成不代表物理阻力已经生效。连接重建后重新初始化，FE-C 已确认的坡度也会定期刷新。
+
+可用短赛道“100 m 平路 → 100 m 的 5% 上坡 → 100 m 平路”在相近挡位和踏频下比较阻力。若上坡仍无变化，请保留从连接到上坡的完整日志。20% 上坡的 FE-C 路况报文为 `a4 09 4f 05 33 ff ff ff ff f0 55 50 21`。软件测试验证报文和控制流程，实际阻力仍需实机验证。
+
+FE-C 蓝牙封装参考：[pycycling TacxTrainerControl](https://github.com/zacharyedwardbull/pycycling/blob/7ec67ef25474982f695b69cf1f652f6a172add4d/pycycling/tacx_trainer_control.py)。
 
 ## 项目结构
 

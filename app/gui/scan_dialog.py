@@ -32,7 +32,7 @@ class ScanDialog(QtWidgets.QDialog):
     def __init__(self, parent: QtWidgets.QWidget | None = None, max_slot: int = MAX_RIDERS) -> None:
         super().__init__(parent)
         self.setWindowTitle("BLE 设备扫描")
-        self.resize(920, 520)
+        self.resize(740, 460)
         self._scan_thread: ScanThread | None = None
         self.max_slot = min(MAX_RIDERS, max(MIN_RIDERS, int(max_slot)))
 
@@ -66,6 +66,9 @@ class ScanDialog(QtWidgets.QDialog):
         self.table.horizontalHeader().setSectionResizeMode(
             QtWidgets.QHeaderView.ResizeMode.Stretch
         )
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)

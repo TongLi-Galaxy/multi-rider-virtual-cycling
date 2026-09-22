@@ -9,6 +9,7 @@ from typing import Any
 
 from bleak import BleakClient
 
+from app.ble.fec import FecControl, FEC_NOTIFY_UUID, FEC_WRITE_UUID
 from app.ble.parsers import (
     parse_cycling_power_measurement,
     parse_ftms_indoor_bike_data,
@@ -34,6 +35,7 @@ STATUS_UNSUPPORTED = "不支持"
 MAX_REASONABLE_POWER = 3000
 FTMS_RESPONSE_CODE_OPCODE = 0x80
 FTMS_SUCCESS = 0x01
+FTMS_CONTROL_RESPONSE_TIMEOUT = 2.0
 FTMS_RESULT_CODES = {
     0x01: "success",
     0x02: "op code not supported",
@@ -73,6 +75,9 @@ class TrainerDeviceClient:
         self._control_lock = asyncio.Lock()
         self._has_requested_control = False
         self._last_grade_sent: float | None = None
+        self._simulation_started = False
+        self._fec: FecControl | None = None
+        self._missing_control_logged = False
 
     async def run(self) -> None:
         while not self._stop_requested:
@@ -104,9 +109,20 @@ class TrainerDeviceClient:
         self._control_responses_enabled = False
         self._pending_control_response.clear()
         self._has_requested_control = False
+        self._last_grade_sent = None
+        self._simulation_started = False
+        self._fec = None
+        self._missing_control_logged = False
 
         def handle_disconnect(_client: BleakClient) -> None:
             self._connected = False
+            self._has_requested_control = False
+            self._simulation_started = False
+            self._last_grade_sent = None
+            for future in self._pending_control_response.values():
+                if not future.done():
+                    future.set_result(0x04)
+            self._pending_control_response.clear()
             if not self._stop_requested:
                 self._emit_status(STATUS_DROPPED, f"{self.name} 异常断开")
 
@@ -128,11 +144,16 @@ class TrainerDeviceClient:
                 if self._control_point_char is not None
                 else None
             )
+            if self._control_point_char is None:
+                self._fec = await self._select_fec_control(client)
+            protocol = "FTMS" if self._control_point_char else ("FE-C over BLE" if self._fec else "不可用（仅采集功率）")
+            self.log_callback(f"[{self.slot}号] 坡度控制通道: {protocol}")
             if not power_char:
                 self._emit_status(STATUS_UNSUPPORTED, f"{self.name} 不支持功率读取")
                 return
 
-            await self._prepare_control_point(client)
+            # Reading power must not take over the trainer resistance.
+            # Control is requested lazily by set_simulation_grade.
             source = (
                 "FTMS Indoor Bike Data"
                 if power_char == FTMS_INDOOR_BIKE_DATA_UUID
@@ -168,6 +189,9 @@ class TrainerDeviceClient:
                         await client.stop_notify(self._control_point_char)
                     except Exception:
                         pass
+                if self._fec is not None:
+                    await self._fec.close()
+                self._fec = None
                 self._ble_client = None
                 self._control_point_uuid = None
                 self._control_point_char = None
@@ -206,6 +230,24 @@ class TrainerDeviceClient:
                     return characteristic
         return None
 
+    async def _select_fec_control(self, client: BleakClient) -> FecControl | None:
+        services = getattr(client, "services", None)
+        if services is None and hasattr(client, "get_services"):
+            services = await client.get_services()
+        chars = {
+            normalize_uuid(str(char.uuid)): char
+            for service in (services or []) for char in service.characteristics
+        }
+        write_char, notify_char = chars.get(FEC_WRITE_UUID), chars.get(FEC_NOTIFY_UUID)
+        if write_char is None or notify_char is None:
+            return None
+        if not set(write_char.properties) & {"write", "write-without-response"}:
+            return None
+        if not set(notify_char.properties) & {"notify", "indicate"}:
+            return None
+        return FecControl(client, write_char, notify_char,
+                          lambda message: self.log_callback(f"[{self.slot}号] {message}"))
+
     async def _prepare_control_point(self, client: BleakClient) -> None:
         if not self._control_point_char:
             self.log_callback(f"[{self.slot}号] 未发现 FTMS 控制点，无法推送坡度")
@@ -227,18 +269,35 @@ class TrainerDeviceClient:
         elif not properties & {"notify", "indicate"}:
             self.log_callback(f"[{self.slot}号] FTMS 控制点未声明 notify/indicate，无法确认控制命令结果")
 
+        if not self._control_responses_enabled:
+            self.log_callback(f"[{self.slot}号] 无法确认控制响应，已停止坡度推送")
+            return
+
         # Bluetooth SIG FTMS Control Point: 0x00 Request Control.
         self._has_requested_control = await self._write_control_command(bytes([0x00]), "请求 FTMS 控制权")
 
-    async def set_simulation_grade(self, grade_percent: float) -> None:
+    async def set_simulation_grade(self, grade_percent: float, rider_kg: float = 70.0,
+                                   bike_kg: float = 10.0) -> None:
         if not self._ble_client or not self._ble_client.is_connected:
             return
-        if not self._control_point_char:
+        if not self._control_point_char and self._fec is None:
+            if not self._missing_control_logged:
+                self.log_callback(f"[{self.slot}号] 坡度未发送: 未发现 FTMS 或 FE-C 控制通道")
+                self._missing_control_logged = True
             return
 
         async with self._control_lock:
-            grade = min(25.0, max(-20.0, float(grade_percent)))
-            if self._last_grade_sent is not None and abs(grade - self._last_grade_sent) < 0.1:
+            if not self._ble_client or not self._ble_client.is_connected:
+                return
+            if not math.isfinite(float(grade_percent)):
+                self.log_callback(f"[{self.slot}号] 无效坡度，未发送: {grade_percent}")
+                return
+            grade = round(min(25.0, max(-20.0, float(grade_percent))), 2)
+            if self._fec is not None:
+                await self._fec.set_grade(grade, rider_kg, bike_kg)
+                return
+            if (self._has_requested_control and self._simulation_started
+                    and self._last_grade_sent == grade):
                 return
 
             if not self._has_requested_control:
@@ -260,8 +319,17 @@ class TrainerDeviceClient:
                 bytes(payload),
                 f"推送坡度 {grade:.1f}%",
             )
-            if success:
-                self._last_grade_sent = grade
+            if not success:
+                return
+            # Some trainers accept simulation parameters while idle but do not
+            # engage their load until Start / Resume has been acknowledged.
+            if not self._simulation_started:
+                self._simulation_started = await self._write_control_command(
+                    bytes([0x07]), "启动 FTMS 模拟负载"
+                )
+                if not self._simulation_started:
+                    return
+            self._last_grade_sent = grade
 
     def _handle_control_response(self, payload: bytearray) -> None:
         self.log_callback(f"[{self.slot}号] FTMS 控制响应: {payload.hex(' ')}")
@@ -278,39 +346,45 @@ class TrainerDeviceClient:
         if not self._ble_client or not self._control_point_char:
             return False
 
-        opcode = int(payload[0])
-        response_future: asyncio.Future[int] | None = None
-        if self._control_responses_enabled:
-            response_future = asyncio.get_running_loop().create_future()
-            stale_future = self._pending_control_response.pop(opcode, None)
-            if stale_future is not None and not stale_future.done():
-                stale_future.cancel()
-            self._pending_control_response[opcode] = response_future
-
-        try:
-            await self._write_control_payload(payload)
-        except Exception as exc:
-            if response_future is not None:
-                self._pending_control_response.pop(opcode, None)
-            self.log_callback(f"[{self.slot}号] {description} 写入失败: {exc}")
+        if not self._control_responses_enabled:
+            self.log_callback(f"[{self.slot}号] {description} 未发送: 控制响应未订阅")
             return False
 
-        if response_future is None:
-            self.log_callback(f"[{self.slot}号] {description} 已写入，设备未提供控制响应")
-            return True
-
+        opcode = int(payload[0])
+        response_future = asyncio.get_running_loop().create_future()
+        self._pending_control_response[opcode] = response_future
         try:
-            result_code = await asyncio.wait_for(response_future, timeout=2.0)
-        except asyncio.TimeoutError:
-            self._pending_control_response.pop(opcode, None)
-            self.log_callback(f"[{self.slot}号] {description} 已写入，未收到 FTMS 控制响应，按已应用处理")
-            return True
+            self.log_callback(f"[{self.slot}号] FTMS 控制发送: {payload.hex(' ')} ({description})")
+            try:
+                await self._write_control_payload(payload)
+            except Exception as exc:
+                self.log_callback(f"[{self.slot}号] {description} 写入失败: {exc}")
+                return False
+            try:
+                result_code = await asyncio.wait_for(
+                    response_future, timeout=FTMS_CONTROL_RESPONSE_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                self.log_callback(
+                    f"[{self.slot}号] {description} 已写入，未收到 FTMS 控制响应，"
+                    "无法确认应用；下次推送将重试"
+                )
+                return False
+        finally:
+            if self._pending_control_response.get(opcode) is response_future:
+                self._pending_control_response.pop(opcode, None)
+            if not response_future.done():
+                response_future.cancel()
 
         result_text = FTMS_RESULT_CODES.get(result_code, f"unknown result 0x{result_code:02x}")
         if result_code == FTMS_SUCCESS:
             self.log_callback(f"[{self.slot}号] {description} 成功")
             return True
 
+        if result_code == 0x05:
+            self._has_requested_control = False
+            self._simulation_started = False
+            self._last_grade_sent = None
         self.log_callback(f"[{self.slot}号] {description} 失败: {result_text}")
         return False
 
@@ -418,5 +492,6 @@ class MockTrainerDeviceClient:
     async def stop(self) -> None:
         self._stop_requested = True
 
-    async def set_simulation_grade(self, grade_percent: float) -> None:
+    async def set_simulation_grade(self, grade_percent: float, rider_kg: float = 70.0,
+                                   bike_kg: float = 10.0) -> None:
         self._last_grade = float(grade_percent)

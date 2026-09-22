@@ -39,6 +39,7 @@ class BleRuntime(QtCore.QThread):
         self._stop_event: asyncio.Event | None = None
         self._clients: list[object] = []
         self._clients_by_slot: dict[int, object] = {}
+        self._grade_tasks: dict[int, asyncio.Task] = {}
 
     def run(self) -> None:
         try:
@@ -50,7 +51,8 @@ class BleRuntime(QtCore.QThread):
         if self._loop and self._stop_event:
             self._loop.call_soon_threadsafe(self._stop_event.set)
 
-    def set_grade(self, slot: int, grade_percent: float) -> None:
+    def set_grade(self, slot: int, grade_percent: float, rider_kg: float = 70.0,
+                  bike_kg: float = 10.0) -> None:
         if not self._loop:
             return
 
@@ -60,7 +62,9 @@ class BleRuntime(QtCore.QThread):
                 return
             setter = getattr(client, "set_simulation_grade", None)
             if setter is not None:
-                asyncio.create_task(setter(grade_percent))
+                pending = self._grade_tasks.get(slot)
+                if pending is None or pending.done():
+                    self._grade_tasks[slot] = asyncio.create_task(setter(grade_percent, rider_kg, bike_kg))
 
         self._loop.call_soon_threadsafe(schedule)
 
@@ -117,6 +121,10 @@ class BleRuntime(QtCore.QThread):
                 break
             client_tasks -= done
 
+        for task in self._grade_tasks.values():
+            task.cancel()
+        await asyncio.gather(*self._grade_tasks.values(), return_exceptions=True)
+        self._grade_tasks.clear()
         for client in self._clients:
             stop = getattr(client, "stop", None)
             if stop is not None:
@@ -136,8 +144,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, mock: bool = False) -> None:
         super().__init__()
         self.setWindowTitle("多人骑行台功率考试软件")
-        self.setMinimumSize(800, 600)
-        self.resize(1180, 760)
+        # Leave room for the title bar and taskbar on an 800 x 600 display.
+        self.setMinimumSize(760, 520)
+        available = self.screen().availableGeometry()
+        self.resize(min(1180, available.width() - 24), min(760, available.height() - 48))
 
         self.logger = get_app_logger()
         self.settings = load_settings()
@@ -180,7 +190,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         controls = QtWidgets.QFrame()
         controls.setObjectName("controlBar")
-        controls_layout = QtWidgets.QHBoxLayout(controls)
+        controls_layout = QtWidgets.QVBoxLayout(controls)
         controls_layout.setContentsMargins(10, 8, 10, 8)
         controls_layout.setSpacing(8)
 
@@ -202,9 +212,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.exam_elapsed_label = QtWidgets.QLabel("")
         self.exam_elapsed_label.setObjectName("examElapsedLabel")
         self.exam_elapsed_label.setVisible(False)
-        controls_layout.addWidget(self.mode_status_label)
-        controls_layout.addStretch(1)
-        controls_layout.addWidget(self.exam_elapsed_label)
+        self.mode_status_label.setObjectName("modeStatusLabel")
+        status_row = QtWidgets.QHBoxLayout()
+        status_row.addWidget(self.mode_status_label, 1)
+        status_row.addWidget(self.exam_elapsed_label)
+        controls_layout.addLayout(status_row)
+        action_row = QtWidgets.QHBoxLayout()
+        action_row.setSpacing(8)
+        self.start_button.setProperty("role", "primary")
+        self.prepare_button.setProperty("role", "primary")
+        self.stop_button.setProperty("role", "danger")
         for button in [
             self.prepare_button,
             self.start_button,
@@ -212,7 +229,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.reset_button,
             self.export_button,
         ]:
-            controls_layout.addWidget(button)
+            action_row.addWidget(button)
+        action_row.addStretch(1)
+        controls_layout.addLayout(action_row)
 
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.addTab(self._build_exam_page(), "考试")
@@ -224,6 +243,10 @@ class MainWindow(QtWidgets.QMainWindow):
         root.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
         self.setStyleSheet(self._stylesheet())
+        for table in self.findChildren(QtWidgets.QTableWidget):
+            table.setAlternatingRowColors(True)
+            table.setShowGrid(False)
+            table.verticalHeader().setDefaultSectionSize(32)
 
     def _build_exam_page(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
@@ -286,6 +309,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.move_segment_down_button = QtWidgets.QPushButton("下移")
         self.move_segment_down_button.clicked.connect(lambda: self._move_route_segment(1))
         self.apply_route_button = QtWidgets.QPushButton("应用赛道")
+        self.apply_route_button.setProperty("role", "primary")
         self.apply_route_button.clicked.connect(self._apply_route_from_table)
         self.save_route_button = QtWidgets.QPushButton("保存赛道")
         self.save_route_button.clicked.connect(self._save_route_from_table)
@@ -301,7 +325,8 @@ class MainWindow(QtWidgets.QMainWindow):
         ]:
             button_row.addWidget(button)
         button_row.addStretch(1)
-        button_row.addWidget(self.route_total_label)
+        self.route_total_label.setObjectName("modeStatusLabel")
+        layout.addWidget(self.route_total_label)
 
         layout.addWidget(self.route_profile_widget)
         layout.addWidget(self.route_table, 1)
@@ -451,7 +476,7 @@ class MainWindow(QtWidgets.QMainWindow):
             font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
             font-size: 13px;
             color: #172026;
-            background: #f4f6f8;
+            background: #f1f5f9;
         }
         QLabel, QCheckBox {
             background: transparent;
@@ -459,14 +484,53 @@ class MainWindow(QtWidgets.QMainWindow):
         #controlBar QLabel, #riderPanel QWidget, #riderPanel QLabel, QGroupBox QLabel, QGroupBox QCheckBox {
             background: transparent;
         }
+        QTabBar::tab {
+            background: transparent;
+            color: #64748b;
+            padding: 7px 22px;
+            border-bottom: 3px solid transparent;
+            font-weight: 600;
+        }
+        QTabBar::tab:selected {
+            color: #0f766e;
+            background: #ffffff;
+            border-bottom-color: #0f766e;
+        }
+        QTabBar::tab:hover { background: #e2eeef; }
+        #modeStatusLabel { color: #526578; font-weight: 600; }
+        QHeaderView::section {
+            background: #eaf0f5;
+            color: #526578;
+            padding: 7px 6px;
+            border: none;
+            border-bottom: 1px solid #d9e0e7;
+            font-weight: 600;
+        }
+        QTableWidget {
+            alternate-background-color: #f7fafc;
+            selection-background-color: #d7eeeb;
+            selection-color: #134e4a;
+        }
+        QTableWidget::item { padding: 3px; }
+        QPushButton[role="primary"] { background: #0f766e; color: white; border-color: #0f766e; }
+        QPushButton[role="primary"]:hover:!disabled { background: #115e59; }
+        QPushButton[role="danger"] { color: #b42332; border-color: #e6b8bd; background: #fff5f5; }
+        QPushButton[role="danger"]:hover:!disabled { background: #ffe4e6; }
+        QPushButton[role]:disabled { background: #edf2f6; color: #94a3b8; border-color: #e2e8f0; }
+        QPushButton:pressed { padding-top: 2px; background: #d7eeeb; }
+        QPushButton:focus { border: 1px solid #14b8a6; }
+        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+            border-color: #0f766e;
+        }
+        QPlainTextEdit { background: #ffffff; border: 1px solid #d9e0e7; padding: 8px; }
         QTabWidget::pane {
             border: 1px solid #d9e0e7;
-            background: #f4f6f8;
+            background: #f1f5f9;
         }
         QGroupBox {
             background: #ffffff;
             border: 1px solid #d9e0e7;
-            border-radius: 6px;
+            border-radius: 8px;
             margin-top: 10px;
             padding: 10px;
             font-weight: 700;
@@ -479,13 +543,13 @@ class MainWindow(QtWidgets.QMainWindow):
         QTableWidget {
             background: #ffffff;
             border: 1px solid #d9e0e7;
-            border-radius: 6px;
+            border-radius: 8px;
             gridline-color: #e8eef2;
         }
         #controlBar, #riderPanel {
             background: #ffffff;
             border: 1px solid #d9e0e7;
-            border-radius: 6px;
+            border-radius: 8px;
         }
         #examElapsedLabel {
             min-width: 86px;
@@ -544,7 +608,7 @@ class MainWindow(QtWidgets.QMainWindow):
             font-weight: 600;
         }
         #riderWeightInput:disabled {
-            background: #f4f6f8;
+            background: #f1f5f9;
             color: #8a98a4;
         }
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
@@ -557,18 +621,20 @@ class MainWindow(QtWidgets.QMainWindow):
         QPushButton {
             min-height: 30px;
             padding: 0 10px;
-            background: #245b73;
-            color: white;
-            border: 0;
+            background: #ffffff;
+            color: #334155;
+            border: 1px solid #cbd5e1;
             border-radius: 4px;
             font-weight: 600;
         }
         QPushButton:disabled {
-            background: #9cadb7;
-            color: #edf2f4;
+            background: #edf2f6;
+            color: #94a3b8;
+            border-color: #e2e8f0;
         }
         QPushButton:hover:!disabled {
-            background: #1d4d62;
+            background: #eaf3f5;
+            border-color: #8cb8c0;
         }
         #primaryMetric {
             font-size: 42px;
@@ -603,7 +669,7 @@ class MainWindow(QtWidgets.QMainWindow):
             font-weight: 700;
         }
         #routeProgress::chunk {
-            background: #74b72e;
+            background: #55b8ac;
             border-radius: 3px;
         }
         #statusDot {
@@ -625,7 +691,7 @@ class MainWindow(QtWidgets.QMainWindow):
             background: #101820;
             color: #e7edf2;
             border: 1px solid #273642;
-            border-radius: 6px;
+            border-radius: 8px;
             font-family: Consolas, "Microsoft YaHei Mono", monospace;
             font-size: 12px;
         }
@@ -1032,6 +1098,10 @@ class MainWindow(QtWidgets.QMainWindow):
             panel.set_inputs_locked(True)
         self._update_exam_elapsed_label()
         self._log(message)
+        self._log(
+            f"考试配置: 模式={self.settings.exam_mode}, 坡度推送={self.settings.push_grade}, "
+            f"Mock={self.settings.mock_mode}"
+        )
 
     def _terminate_exam(self) -> None:
         ok, message = self.controller.terminate()
@@ -1099,7 +1169,9 @@ class MainWindow(QtWidgets.QMainWindow):
         for rider in self.controller.selected_riders():
             if rider.slot not in self.controller.active_slots:
                 continue
-            self.ble_runtime.set_grade(rider.slot, rider.current_grade_percent)
+            self.ble_runtime.set_grade(
+                rider.slot, rider.current_grade_percent, rider.weight_kg, self.settings.bike_weight_kg
+            )
 
     def _exam_finished(self) -> None:
         self.scan_button.setEnabled(True)

@@ -70,12 +70,15 @@ class RouteProfileWidget(QtWidgets.QWidget):
         area.lineTo(mapped[-1].x(), baseline_y)
         area.closeSubpath()
 
-        painter.fillPath(area, QtGui.QColor("#92cf2b"))
-        painter.setPen(QtGui.QPen(QtGui.QColor("#6aaa1e"), 3))
+        gradient = QtGui.QLinearGradient(0, chart.top(), 0, baseline_y)
+        gradient.setColorAt(0, QtGui.QColor("#67c7b5"))
+        gradient.setColorAt(1, QtGui.QColor("#e0f3ed"))
+        painter.fillPath(area, gradient)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#218d7c"), 3))
         for index in range(1, len(mapped)):
             painter.drawLine(mapped[index - 1], mapped[index])
 
-        painter.setPen(QtGui.QPen(QtGui.QColor("#24313d"), 2))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#94a3b8"), 2))
         painter.drawLine(chart.left(), baseline_y, chart.right(), baseline_y)
 
         segment_x = chart.left()
